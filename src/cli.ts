@@ -2,7 +2,14 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs';
-import { DeepLTranslator, ITranslator, DeepLFormality } from './translator';
+import {
+  DeepLTranslator,
+  ITranslator,
+  DeepLFormality,
+  createTranslator,
+  parseBackend,
+  BackendName,
+} from './translator';
 import { TranslationEngine } from './engine';
 import { MockTranslator } from './mock-translator';
 
@@ -10,26 +17,38 @@ const program = new Command();
 
 program
   .name('comment-translator')
-  .description('Translate JSDoc and code comments using DeepL (Free/Pro) API\nSupports: .js, .ts, .jsx, .tsx, .mjs, .cjs')
-  .version('2.1.2');
+  .description(
+    'Translate JSDoc and code comments using DeepL / Google Translate API\n' +
+      'Supports: .js, .ts, .jsx, .tsx, .mjs, .cjs'
+  )
+  .version('2.2.0');
+
+const BACKEND_CHOICES = ['deepl', 'google'] as const;
 
 program
   .argument('<input>', 'Input file or directory to process')
   .option('-o, --output <path>', 'Output directory or file path')
-  .option('-t, --target <lang>', 'Target language code (e.g. "ZH", "EN", "JA", "KO", "zh")', 'ZH')
+  .option('-t, --target <lang>', 'Target language code (e.g. "ZH", "zh-CN", "EN", "JA")', 'ZH')
   .option('-s, --source <lang>', 'Source language code (optional, auto-detect if not set)')
-  .option('-k, --api-key <key>', 'DeepL API key (or set DEEPL_API_KEY env var)')
-  .option('--free', 'Force use of DeepL Free endpoint (api-free.deepl.com)')
-  .option('--pro', 'Force use of DeepL Pro endpoint (api.deepl.com)')
-  .option('--formality <level>', 'Formality: default | prefer_less | prefer_more | less | more')
-  .option('--glossary <id>', 'DeepL glossary ID for consistent terminology')
+  .option(
+    '-b, --backend <name>',
+    `Translation backend: ${BACKEND_CHOICES.join(' | ')} (default: deepl)`,
+    'deepl'
+  )
+  .option('-k, --api-key <key>', 'API key (DeepL: DEEPL_API_KEY, Google: GOOGLE_API_KEY)')
+  .option('--free', 'DeepL: force Free endpoint (api-free.deepl.com)')
+  .option('--pro', 'DeepL: force Pro endpoint (api.deepl.com)')
+  .option('--formality <level>', 'DeepL only: default | prefer_less | prefer_more | less | more')
+  .option('--glossary <id>', 'DeepL only: glossary ID for consistent terminology')
+  .option('--google-model <model>', 'Google only: base | nmt (default: nmt)')
+  .option('--google-credentials <path>', 'Google only: service-account key.json path')
   .option('--mock', 'Use MockTranslator instead of real API (for testing)')
   .option('--extensions <exts>', 'Comma-separated file extensions', '.js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts')
   .option('--no-recursive', 'Disable recursive directory traversal')
   .option('--dry-run', 'Preview without writing files')
-  .option('--progress', 'Show a progress bar while translating (default: on)')
-  .option('--no-progress', 'Disable the progress bar')
   .option('-v, --verbose', 'Verbose output')
+  .option('--progress', 'Show a progress bar while translating (default: true unless -v is set)')
+  .option('--no-progress', 'Hide the progress bar')
   .action(async (input: string, options: any) => {
     try {
       // Validate input
@@ -39,28 +58,39 @@ program
       }
 
       const targetLang = options.target;
+      const backend = parseBackend(options.backend as string | undefined, 'deepl');
+
+      // Resolve which API key env var belongs to the selected backend.
+      const apiKeyEnv = backend === 'google' ? 'GOOGLE_API_KEY' : 'DEEPL_API_KEY';
+      const apiKey = options.apiKey || process.env[apiKeyEnv] || '';
 
       // Build translator
       let translator: ITranslator;
-      const useMock = options.mock || (!options.apiKey && !process.env.DEEPL_API_KEY);
+      const useMock =
+        options.mock || (!apiKey && backend !== 'google' && !process.env.GOOGLE_APPLICATION_CREDENTIALS);
 
       if (useMock) {
         if (!options.mock) {
-          console.warn(chalk.yellow('⚠ No DEEPL_API_KEY provided. Falling back to MockTranslator.'));
-          console.warn(chalk.gray('  Set --api-key or DEEPL_API_KEY for real translation.\n'));
+          console.warn(
+            chalk.yellow(
+              `⚠ No ${apiKeyEnv} provided. Falling back to MockTranslator.`
+            )
+          );
+          console.warn(chalk.gray('  Set --api-key / ' + apiKeyEnv + ' for real translation.\n'));
         }
         translator = new MockTranslator({ targetLanguage: targetLang });
       } else {
-        const freeFlag = options.free ? true : (options.pro ? false : undefined);
-        const deeplOpts: any = {
-          apiKey: options.apiKey || process.env.DEEPL_API_KEY,
+        translator = createTranslator({
+          backend,
+          apiKey,
           targetLang,
           sourceLang: options.source,
-          free: freeFlag,
-        };
-        if (options.formality) deeplOpts.formality = options.formality as DeepLFormality;
-        if (options.glossary) deeplOpts.glossaryId = options.glossary;
-        translator = new DeepLTranslator(deeplOpts);
+          free: options.free ? true : options.pro ? false : undefined,
+          formality: options.formality as DeepLFormality | undefined,
+          glossaryId: options.glossary,
+          credentialsPath: options.googleCredentials,
+          googleModel: options.googleModel,
+        });
       }
 
       // Parse extensions
@@ -78,15 +108,16 @@ program
         recursive: options.recursive !== false,
         dryRun: options.dryRun || false,
         verbose: options.verbose || false,
-        progress: options.progress !== false,
+        // Default to showing the bar; --verbose implies structured logs instead.
+        progress: options.progress !== false && !options.verbose,
       });
 
-      console.log(chalk.bold('🚀 Comment Translator (DeepL)'));
+      console.log(chalk.bold(`🚀 Comment Translator (${backend === 'google' ? 'Google' : 'DeepL'})`));
       console.log(chalk.gray(`   Input:     ${input}`));
+      console.log(chalk.gray(`   Backend:   ${useMock ? 'Mock' : backend}`));
       console.log(chalk.gray(`   Target:    ${targetLang}`));
       if (options.source) console.log(chalk.gray(`   Source:    ${options.source}`));
       if (options.output) console.log(chalk.gray(`   Output:    ${options.output}`));
-      console.log(chalk.gray(`   Backend:   ${useMock ? 'Mock' : 'DeepL API'}`));
       if (options.dryRun) console.log(chalk.yellow('   Mode:      DRY RUN (no files written)'));
       console.log('');
 
@@ -121,9 +152,18 @@ program.on('--help', () => {
   console.log('  # Mock mode (no API key required)');
   console.log('  $ comment-translator ./src --mock --target zh');
   console.log('');
+  console.log('  # Use Google Translate instead of DeepL');
+  console.log('  $ export GOOGLE_API_KEY="AIza..."');
+  console.log('  $ comment-translator ./src --backend google --target zh-CN -o ./out');
+  console.log('  # Google with a service-account key (recommended for production)');
+  console.log('  $ export GOOGLE_APPLICATION_CREDENTIALS="./key.json"');
+  console.log('  $ comment-translator ./src --backend google --target ja');
+  console.log('');
   console.log('Environment variables:');
-  console.log('  DEEPL_API_KEY   DeepL API authentication key (:fx = Free, else Pro)');
-  console.log('  DEEPL_FREE       Set "true" to force Free endpoint');
+  console.log('  DEEPL_API_KEY              DeepL API key (:fx = Free, else Pro)');
+  console.log('  GOOGLE_API_KEY             Google Cloud API key');
+  console.log('  GOOGLE_APPLICATION_CREDENTIALS  Path to a Google service-account key.json');
+  console.log('  DEEPL_FREE                 Set "true" to force DeepL Free endpoint');
 });
 
 program.parse(process.argv);

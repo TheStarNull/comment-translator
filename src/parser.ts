@@ -174,54 +174,57 @@ export function cleanCommentText(comment: ExtractedComment): string {
 }
 
 /**
- * Detect the common leading indentation (including the "*" marker) shared by
- * every line of a block/JSDoc comment. Returns the indent string (e.g. " * ")
- * that should be prepended to each rebuilt line.
+ * Rebuild a comment body by re-applying the original per-line " * " (or
+ * equivalent) prefix to each line of `translatedText`.
  *
- * Using a single, stable indent (rather than re-using each original line's
- * indent) avoids misalignment when the translated text has a different number
- * of lines than the original — the root cause of the historic JSDoc structure
- * corruption bug.
+ * The original bug: this function keyed the prefix off `originalLines[idx]`,
+ * so when the translated text had a different number of lines the indent
+ * slipped and the reconstructed JSDoc lost its structure.
+ *
+ * Fix: detect the leading " * "-style prefix from the FIRST non-empty line
+ * of the original body (the very first line is often empty because the
+ * comment delimiter was stripped), then apply that same prefix uniformly
+ * to every line of the translated text. Blank lines in the translated
+ * output are rendered as a bare prefix so the visual structure is kept.
  */
-function detectBlockIndent(blockText: string): string {
-  const lines = blockText.split('\n');
-  // Find the first non-empty line to infer the indent pattern.
-  for (const line of lines) {
-    const m = line.match(/^(\s*\*\s?)/);
-    if (m) return m[1].replace(/\s$/, ' ') /* normalize trailing */ || ' * ';
-    const s = line.match(/^(\s*)/);
-    if (s && s[1].length > 0) return s[1];
+function prefixEachLine(originalBody: string, translatedText: string): string {
+  const originalLines = originalBody.split('\n');
+
+  // Find the first non-empty line to infer the standard prefix (e.g. "     * ").
+  let sample = '';
+  for (const line of originalLines) {
+    if (line.trim() !== '') { sample = line; break; }
   }
-  return ' * ';
+  const prefixMatch = sample.match(/^(\s*\*?\s*)/);
+  let prefix = prefixMatch && prefixMatch[0] ? prefixMatch[0] : ' * ';
+  if (prefix.trim() === '*') prefix = prefix.replace(/\*$/, '* ');
+
+  const translatedLines = translatedText.split('\n');
+  return translatedLines
+    .map(line => {
+      if (line.trim() === '') {
+        // A blank line keeps the leading whitespace/prefix shape (e.g. "     *").
+        return prefix.replace(/\S.*$/, '') + (prefix.includes('*') ? '*' : '');
+      }
+      return `${prefix}${line.trim()}`;
+    })
+    .join('\n');
 }
 
 /**
- * Rebuild comment with translated text, preserving formatting
+ * Rebuild comment with translated text, preserving formatting.
+ * The translated text is the COMMENT BODY (no delimiters) as produced by
+ * serializeJSDoc() — i.e. it already contains the correct tag structure.
  */
 export function rebuildComment(comment: ExtractedComment, translatedText: string): string {
   if (comment.type === 'jsdoc') {
-    // Rebuild JSDoc with a uniform "* " prefix on every line so that the
-    // structure stays valid even when translation changes the line count.
-    const translatedLines = translatedText.split('\n');
-    const indent = detectBlockIndent(comment.text);
-
-    const rebuilt = translatedLines
-      .map(line => `${indent}${line}`)
-      .join('\n');
-
-    // Wrap with /** ... */  (avoid double star if already present)
-    return `/**\n${rebuilt}\n */`;
+    const body = prefixEachLine(comment.text, translatedText);
+    return `/**\n${body}\n */`;
   }
 
   if (comment.type === 'block') {
-    const translatedLines = translatedText.split('\n');
-    const indent = detectBlockIndent(comment.text);
-
-    const rebuilt = translatedLines
-      .map(line => `${indent}${line}`)
-      .join('\n');
-
-    return `/*\n${rebuilt}\n */`;
+    const body = prefixEachLine(comment.text, translatedText);
+    return `/*\n${body}\n */`;
   }
 
   // Single line comment

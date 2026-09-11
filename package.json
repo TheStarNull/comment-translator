@@ -1,7 +1,7 @@
 {
   "name": "comment-translator",
-  "version": "2.1.2",
-  "description": "Translate JSDoc and code comments using DeepL (Free/Pro) API. Supports TS/JS/JSX.",
+  "version": "2.2.0",
+  "description": "Translate JSDoc and code comments using DeepL / Google Translate API. Supports TS/JS/JSX.",
   "main": "dist/cli.js",
   "bin": {
     "comment-translator": "./dist/cli.js"
@@ -13,7 +13,7 @@
     "test": "node dist/test-demo.js",
     "test:unit": "node test-unit.js"
   },
-  "keywords": ["jsdoc", "translator", "deepl", "typescript", "comments"],
+  "keywords": ["jsdoc", "translator", "deepl", "google-translate", "typescript", "comments"],
   "author": "",
   "license": "MIT",
   "dependencies": {

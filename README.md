@@ -1,19 +1,20 @@
 # Comment Translator 🌐
 
-一个专门翻译 **JSDoc** 和代码注释的工具，支持 **JavaScript / TypeScript**（含 `.js`, `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`），通过 **DeepL Translate API**（Free / Pro）进行翻译，输出翻译后的文件。
+一个专门翻译 **JSDoc** 和代码注释的工具，支持 **JavaScript / TypeScript**（含 `.js`, `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`），通过 **DeepL** 或 **Google Translate API** 进行翻译，输出翻译后的文件。
 
-> 本项目最初基于 Google Translate，现已**全面迁移到 DeepL**。DeepL 翻译质量更高，Free 版提供每月 50 万字符免费额度。
+> 默认使用 **DeepL**（翻译质量更高，Free 版每月 50 万字符免费额度）；可通过 `--backend google` 一键切换到 **Google Translate**（覆盖 130+ 语言，免费额度同为 50 万字符/月）。
 
 ## ✨ 功能特性
 
 - 🔍 **智能解析** — 精确提取 JSDoc、块注释、行注释
-- 🏷️ **JSDoc 感知** — 识别 `@param` `@returns` `@example` 等标签，只翻译描述部分，保留类型与参数名
+- 🏷️ **JSDoc 感知** — 识别 `@param` `@returns` `@example` `@beta` `@remarks` 等标签，只翻译描述部分，保留类型与参数名
 - 📦 **批量翻译** — 自动合并文本进行批量 API 调用，提高效率
-- 🌍 **多语言支持** — 支持 DeepL 所有目标语言：ZH（简体）、ZH-HANT（繁体）、EN、JA、KO、DE、FR、ES、RU、PT-BR 等
+- 🌍 **多后端** — **DeepL**（默认，质量优先）／**Google**（覆盖广、价格低），用 `--backend` 切换；新增后端只需实现一个类
+- 🌍 **多语言支持** — 取决于所选后端：DeepL 支持 ZH/ZH-HANT/EN/JA/KO/DE/FR/ES/RU/PT-BR 等；Google 支持 130+ 语言（zh-CN / zh-TW / ja / ko ...）
 - 📁 **目录递归** — 支持单文件或整个目录批量处理
 - 🎯 **格式保持** — 翻译后保持原始缩进、星号前缀等格式
 - 🧪 **Mock 模式** — 内置模拟翻译器，无需 API Key 即可测试
-- 🔑 **术语表** — 支持 DeepL Glossary，保证术语一致性
+- 🔑 **术语表 / 模型** — DeepL Glossary；Google `base` / `nmt` 模型
 - ⚡ **自动重试** — 对限流（429）、配额（456）、5xx 错误自动退避重试
 
 ## 📦 安装
@@ -26,14 +27,13 @@ npm run build
 
 ## 🚀 快速使用
 
-### 方式一：使用真实 DeepL API
+### 方式一：DeepL（默认）
 
 1. 注册 DeepL API Free：https://www.deepl.com/pro-api （Free key 通常以 `:fx` 结尾）
 2. 配置 API Key：
 
 ```bash
 export DEEPL_API_KEY="你的KEY:fx"
-# 或运行时传参
 ```
 
 ```bash
@@ -45,12 +45,31 @@ node dist/cli.js ./src --target JA -o ./output
 
 # 使用术语表保证术语一致
 node dist/cli.js ./lib --api-key KEY --glossary abc123 --target ZH
-
-# 预览（不写文件）
-node dist/cli.js ./src --api-key KEY --target ZH --dry-run -v
 ```
 
-### 方式二：使用 Mock 模式（无需 API Key）
+### 方式二：Google Translate（`--backend google`）
+
+1. 创建 API Key：https://console.cloud.google.com/apis/credentials （启用 **Cloud Translation API**）
+2. 或使用服务账号 key.json（生产推荐）：
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="./google-key.json"
+```
+
+```bash
+# 切换到 Google，目标语言用 BCP-47（zh-CN / zh-TW / ja ...）
+node dist/cli.js ./src --backend google --target zh-CN -o ./out
+
+# 使用 API Key 明文传参
+node dist/cli.js ./src --backend google --api-key "$GOOGLE_API_KEY" --target ja
+
+# 指定 nmt 模型 + 源语言
+node dist/cli.js ./src --backend google --target zh-CN --source en --google-model nmt
+```
+
+> 💡 选择建议：**主要语言 + 翻译质量优先 → DeepL**；**小语种 / 多语言覆盖广 / 成本敏感 → Google**（Google 每百万字符约 \$20，DeepL Pro 约 \$25+固定费）。
+
+### 方式三：Mock 模式（无需 API Key）
 
 ```bash
 npm run build && node dist/test-demo.js
@@ -62,23 +81,29 @@ node dist/cli.js ./src --mock --target zh
 
 ```
 Arguments:
-  <input>                  输入文件或目录
+  <input>                        输入文件或目录
 
 Options:
-  -o, --output <path>      输出目录或文件路径
-  -t, --target <lang>      目标语言代码 (默认: "ZH")
-                           ZH(简体)/ZH-HANT(繁体)/EN/JA/KO/DE/FR/ES/RU/PT-BR...
-  -s, --source <lang>      源语言代码 (可选, 默认自动检测)
-  -k, --api-key <key>      DeepL API Key
-  --free                   强制使用 Free 端点 (api-free.deepl.com)
-  --pro                    强制使用 Pro 端点 (api.deepl.com)
-  --formality <level>      语气: default|prefer_less|prefer_more|less|more
-  --glossary <id>          DeepL 术语表 ID
-  --mock                   使用模拟翻译器 (无需 API Key)
-  --extensions <exts>      文件扩展名 (默认: ".js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts")
-  --no-recursive            禁用递归目录遍历
-  --dry-run                预览模式, 不写入文件
-  -v, --verbose            详细输出
+  -o, --output <path>            输出目录或文件路径
+  -t, --target <lang>            目标语言代码 (默认: "ZH")
+                                 DeepL: ZH/ZH-HANT/EN/JA/KO/DE/FR/ES/RU/PT-BR...
+                                 Google: zh-CN/zh-TW/en/ja/ko/de/fr/es/...
+  -s, --source <lang>            源语言代码 (可选, 默认自动检测)
+  -b, --backend <name>           翻译后端: deepl | google (默认: deepl)
+  -k, --api-key <key>            API Key (DeepL: DEEPL_API_KEY / Google: GOOGLE_API_KEY)
+  --free                         DeepL: 强制 Free 端点 (api-free.deepl.com)
+  --pro                          DeepL: 强制 Pro 端点 (api.deepl.com)
+  --formality <level>            DeepL 语气: default|prefer_less|prefer_more|less|more
+  --glossary <id>               DeepL 术语表 ID
+  --google-model <model>         Google 模型: base | nmt (默认: nmt)
+  --google-credentials <path>    Google 服务账号 key.json 路径
+  --mock                         使用模拟翻译器 (无需 API Key)
+  --extensions <exts>            文件扩展名 (默认: ".js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts")
+  --no-recursive                 禁用递归目录遍历
+  --dry-run                      预览模式, 不写入文件
+  -v, --verbose                  详细输出
+  --progress                     显示进度条 (默认: 开, 除非 -v)
+  --no-progress                  隐藏进度条
 ```
 
 ## 📊 示例
@@ -126,12 +151,14 @@ class User {
 ```
 comment-translator/
 ├── src/
-│   ├── cli.ts              # 命令行入口
-│   ├── translator.ts       # DeepL API 封装 (ITranslator 接口)
+│   ├── cli.ts              # 命令行入口 (--backend 参数)
+│   ├── translator.ts       # ITranslator 接口 + DeepLTranslator + 工厂 createTranslator()
+│   ├── google-translator.ts# Google Cloud Translation API 封装
+│   ├── google-auth.ts      # Google 服务账号 JWT 签名 (纯 Node crypto, 无新依赖)
 │   ├── mock-translator.ts  # 模拟翻译器 (测试用)
 │   ├── parser.ts           # 注释提取与还原
-│   ├── jsdoc-parser.ts     # JSDoc 标签解析
-│   ├── engine.ts           # 核心翻译引擎
+│   ├── jsdoc-parser.ts     # JSDoc 标签解析 (含 @beta/@remarks 修复)
+│   ├── engine.ts           # 核心翻译引擎 + 进度条
 │   └── test-demo.ts        # 演示/测试入口
 ├── package.json
 ├── tsconfig.json
@@ -157,11 +184,16 @@ export DEEPL_API_KEY="你的KEY:fx"
 export DEEPL_FREE=true
 ```
 
-## 🔌 切换其他翻译后端
+## 🔌 切换 / 新增翻译后端
 
-`ITranslator` 接口（`translate` / `translateBatch`）让替换后端非常简单。只需新增一个实现类即可接入 LibreTranslate、Google、Ollama 等：
+v2.2 起已内置 **DeepL** 与 **Google** 双后端，用 `--backend deepl|google` 切换。如需接入 LibreTranslate、Azure、Ollama 等，只需：
+
+1. 新建 `src/xxx-translator.ts`，实现 `ITranslator` 接口（`translate` / `translateBatch`）
+2. 在 `translator.ts` 的 `createTranslator()` 工厂里加一个 `case`
+3. 在 `cli.ts` 的 `--backend` 选项描述里加上名字
 
 ```ts
+// 示例：自定义后端只需实现一个接口
 class MyTranslator implements ITranslator {
   async translate(text: string): Promise<string> { ... }
   async translateBatch(texts: string[]): Promise<string[]> { ... }

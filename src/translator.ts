@@ -245,3 +245,77 @@ export class DeepLTranslator implements ITranslator {
     throw lastErr;
   }
 }
+
+/* ================================================================== */
+/*  Backend registry / factory                                        */
+/* ================================================================== */
+
+/** Translation backend identifiers supported by `--backend`. */
+export type BackendName = 'deepl' | 'google';
+
+/** Normalize a CLI value into a known BackendName; throws on unknown input. */
+export function parseBackend(value: string | undefined, fallback: BackendName = 'deepl'): BackendName {
+  const v = (value ?? fallback).trim().toLowerCase();
+  if (v === 'deepl' || v === 'google') return v;
+  throw new Error(
+    `Unknown --backend "${value}". Supported values: deepl, google.`
+  );
+}
+
+/**
+ * Common configuration accepted by every backend. The engine / CLI build this
+ * once and pass it to `createTranslator`, keeping backend selection in one
+ * place (single responsibility).
+ */
+export interface CreateTranslatorOptions {
+  /** Backend to use. Defaults to 'deepl'. */
+  backend?: BackendName;
+  /** API key (DeepL: DEEPL_API_KEY, Google: GOOGLE_API_KEY). */
+  apiKey?: string;
+  /** Target language code (DeepL: 'ZH', Google: 'zh-CN'). */
+  targetLang?: string;
+  /** Source language code (optional, auto-detect when omitted). */
+  sourceLang?: string;
+  /** DeepL only: force Free / Pro endpoint. */
+  free?: boolean;
+  /** DeepL only: formality preference. */
+  formality?: DeepLFormality;
+  /** DeepL only: glossary ID. */
+  glossaryId?: string;
+  /** Google only: service-account key.json path. */
+  credentialsPath?: string;
+  /** Google only: 'base' | 'nmt'. */
+  googleModel?: 'base' | 'nmt';
+}
+
+/**
+ * Create an ITranslator for the requested backend. This is the single entry
+ * point used by the CLI; individual backend classes stay decoupled.
+ */
+export function createTranslator(opts: CreateTranslatorOptions = {}): ITranslator {
+  const backend = parseBackend(opts.backend);
+
+  if (backend === 'google') {
+    // Lazy require so DeepL-only users do not pull in Google-specific code.
+    const { GoogleTranslator } = require('./google-translator') as {
+      GoogleTranslator: new (o: any) => ITranslator;
+    };
+    return new GoogleTranslator({
+      apiKey: opts.apiKey ?? process.env.GOOGLE_API_KEY,
+      credentialsPath: opts.credentialsPath ?? process.env.GOOGLE_APPLICATION_CREDENTIALS,
+      targetLang: opts.targetLang,
+      sourceLang: opts.sourceLang,
+      model: opts.googleModel,
+    });
+  }
+
+  // Default: DeepL (historical behaviour, preserved for backward compat).
+  return new DeepLTranslator({
+    apiKey: opts.apiKey ?? process.env.DEEPL_API_KEY,
+    targetLang: opts.targetLang,
+    sourceLang: opts.sourceLang,
+    free: opts.free,
+    formality: opts.formality,
+    glossaryId: opts.glossaryId,
+  });
+}

@@ -121,7 +121,7 @@ async function main() {
       const parsed = parseJSDoc(cleaned);
       const parts = extractTranslatableParts(parsed);
       console.log(chalk.cyan(`  JSDoc at line ${c.line}:`));
-      console.log(chalk.gray(`    Description: ${parsed.description.substring(0, 60)}`));
+      console.log(chalk.gray(`    Description: ${parsed.descriptionLines.join('\n').substring(0, 60)}`));
       console.log(chalk.gray(`    Tags: ${parsed.tags.map(t => '@' + t.tag).join(', ')}`));
       console.log(chalk.gray(`    Translatable parts: ${parts.length}`));
       console.log('');
