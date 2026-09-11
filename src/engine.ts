@@ -23,51 +23,22 @@ export interface EngineConfig {
   dryRun?: boolean;
   /** Verbose logging */
   verbose?: boolean;
-  /** Show a progress bar (default: true when not verbose) */
+  /** Show a progress bar while translating (default: true) */
   progress?: boolean;
 }
 
 const DEFAULT_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.d.ts'];
 const SKIP_DIRS = ['node_modules', 'dist', 'build', '.next', '.git', 'coverage', '__tests__'];
 
-/* ------------------------------------------------------------------ */
-/*  Lightweight progress bar (no extra dependencies — uses chalk only)  */
-/* ------------------------------------------------------------------ */
-
-class ProgressBar {
-  private barWidth = 30;
-  private lastLine = '';
-
-  constructor(private total: number, private label: string) {}
-
-  update(current: number, extra = ''): void {
-    const ratio = this.total > 0 ? Math.min(current / this.total, 1) : 1;
-    const filled = Math.round(this.barWidth * ratio);
-    const bar =
-      chalk.green('█'.repeat(filled)) + chalk.gray('░'.repeat(this.barWidth - filled));
-    const percent = Math.round(ratio * 100).toString().padStart(3);
-    const line = `\r${chalk.bold(this.label)} [${bar}] ${percent}%  (${current}/${this.total})${extra ? '  ' + chalk.gray(extra) : ''}`;
-    process.stdout.write(line);
-    this.lastLine = line;
-  }
-
-  done(extra = ''): void {
-    // Final update (100%) with the summary detail, then move to the next line
-    // so the statistics block below renders cleanly.
-    this.update(this.total, extra);
-    process.stdout.write('\n');
-    this.lastLine = '';
-  }
-
-  /** Erase the bar line so other logs can be printed cleanly above it. */
-  clearLine(): void {
-    if (!this.lastLine) return;
-    process.stdout.write('\r\x1b[K');
-    this.lastLine = '';
-  }
+/**
+ * Match a file path against supported extensions.
+ * Handles double-suffix files like "index.d.ts" where path.extname() returns ".ts":
+ * we check whether the path ends with any of the configured extensions.
+ */
+function matchesExtension(filePath: string, extensions: string[]): boolean {
+  const lower = filePath.toLowerCase();
+  return extensions.some(ext => lower.endsWith(ext.toLowerCase()));
 }
-
-/* ------------------------------------------------------------------ */
 
 export class TranslationEngine {
   private config: Required<Omit<EngineConfig, 'output'>> & { output?: string };
@@ -91,73 +62,73 @@ export class TranslationEngine {
   }
 
   /**
+   * Collect every file that will be processed, so we can show an accurate
+   * progress bar (total count is known up front).
+   */
+  private collectFiles(dir: string): string[] {
+    const out: string[] = [];
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (this.config.skipCommonDirs && SKIP_DIRS.includes(entry.name)) continue;
+        if (this.config.recursive) out.push(...this.collectFiles(full));
+      } else if (entry.isFile() && matchesExtension(full, this.config.extensions)) {
+        out.push(full);
+      }
+    }
+    return out;
+  }
+
+  /**
    * Run the translation process
    */
   async run(): Promise<void> {
     const { input } = this.config;
     const stat = fs.statSync(input);
 
-    // Collect the full file list up-front so we can show a meaningful progress bar.
-    const files = stat.isDirectory()
-      ? this.collectFiles(input)
-      : [input];
+    // Build a progress bar (file-level) if enabled and we have a directory.
+    let bar: { update: (n: number, ctx?: any) => void; stop: () => void } | null = null;
+    let totalFiles = 0;
+    let doneFiles = 0;
 
-    if (this.shouldShowProgress()) {
-      const bar = new ProgressBar(files.length, 'Files');
-      (this as any)._fileBar = bar;
+    const showProgress = this.config.progress && !this.config.verbose;
+    if (showProgress) {
+      if (stat.isDirectory()) {
+        try { totalFiles = this.collectFiles(input).length; } catch { totalFiles = 0; }
+      } else {
+        totalFiles = 1;
+      }
     }
+
+    if (showProgress && totalFiles > 0) {
+      bar = createProgressBar(totalFiles);
+    }
+
+    const tick = (filePath: string) => {
+      if (bar) {
+        doneFiles++;
+        bar.update(doneFiles, { file: path.basename(filePath) });
+      }
+    };
 
     if (stat.isFile()) {
-      await this.processFile(input, 0, files.length);
+      await this.processFile(input, tick);
     } else if (stat.isDirectory()) {
-      for (let i = 0; i < files.length; i++) {
-        await this.processFile(files[i], i, files.length);
-      }
+      await this.processDirectory(input, tick);
     }
 
-    this.finishProgress();
+    if (bar) bar.stop();
     this.printStats();
-  }
-
-  /** Walk the directory tree and return every file matching the configured extensions. */
-  private collectFiles(dir: string): string[] {
-    const out: string[] = [];
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (this.config.skipCommonDirs && SKIP_DIRS.includes(entry.name)) continue;
-        if (this.config.recursive) {
-          out.push(...this.collectFiles(fullPath));
-        }
-      } else if (entry.isFile()) {
-        if (matchesExtension(fullPath, this.config.extensions)) {
-          out.push(fullPath);
-        }
-      }
-    }
-    return out;
-  }
-
-  private shouldShowProgress(): boolean {
-    return this.config.progress && !this.config.verbose;
-  }
-
-  private updateFileProgress(current: number, total: number, extra: string): void {
-    const bar: ProgressBar | undefined = (this as any)._fileBar;
-    if (bar) bar.update(current, extra);
-  }
-
-  private finishProgress(): void {
-    const bar: ProgressBar | undefined = (this as any)._fileBar;
-    if (bar) bar.done(`${this.stats.commentsTranslated} comments translated`);
   }
 
   /**
    * Process all files in a directory
    */
-  private async processDirectory(dir: string): Promise<void> {
+  private async processDirectory(
+    dir: string,
+    tick: (filePath: string) => void = () => {},
+  ): Promise<void> {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
 
     for (const entry of entries) {
@@ -171,10 +142,10 @@ export class TranslationEngine {
           continue;
         }
         if (this.config.recursive) {
-          await this.processDirectory(fullPath);
+          await this.processDirectory(fullPath, tick);
         }
       } else if (entry.isFile()) {
-        await this.processFile(fullPath);
+        await this.processFile(fullPath, tick);
       }
     }
   }
@@ -184,8 +155,7 @@ export class TranslationEngine {
    */
   private async processFile(
     filePath: string,
-    index?: number,
-    total?: number,
+    tick: (filePath: string) => void = () => {},
   ): Promise<void> {
     if (!matchesExtension(filePath, this.config.extensions)) {
       this.stats.filesSkipped++;
@@ -201,7 +171,6 @@ export class TranslationEngine {
           console.log(chalk.gray(`  No comments found: ${filePath}`));
         }
         this.stats.filesSkipped++;
-        this.tickProgress(index, total, filePath);
         return;
       }
 
@@ -234,7 +203,6 @@ export class TranslationEngine {
 
       if (textsToTranslate.length === 0) {
         this.stats.filesSkipped++;
-        this.tickProgress(index, total, filePath);
         return;
       }
 
@@ -290,27 +258,10 @@ export class TranslationEngine {
       }
 
       this.stats.filesProcessed++;
-      this.tickProgress(index, total, filePath);
+      tick(filePath);
     } catch (error: any) {
       this.stats.errors++;
-      // Errors should still be visible even when the progress bar is active.
-      this.clearProgressLine();
       console.error(chalk.red(`  ✗ Error processing ${filePath}: ${error.message}`));
-      this.tickProgress(index, total, filePath);
-    }
-  }
-
-  /** Advance the file-level progress bar by one. */
-  private tickProgress(index?: number, total?: number, filePath?: string): void {
-    if (!this.shouldShowProgress()) return;
-    if (index === undefined || total === undefined) return;
-    const name = filePath ? path.basename(filePath) : '';
-    this.updateFileProgress(index + 1, total, name);
-  }
-
-  private clearProgressLine(): void {
-    if (this.shouldShowProgress()) {
-      process.stdout.write('\r\x1b[K');
     }
   }
 
@@ -353,11 +304,46 @@ export class TranslationEngine {
 }
 
 /**
- * Match a file path against supported extensions.
- * Handles double-suffix files like "index.d.ts" where path.extname() returns ".ts":
- * we check whether the path ends with any of the configured extensions.
+ * Lightweight single-line progress bar rendered with chalk (no extra deps).
+ * Usage:
+ *   const bar = createProgressBar(100);
+ *   bar.update(1, { file: 'a.ts' });  // 1-based
+ *   ...
+ *   bar.stop();
  */
-function matchesExtension(filePath: string, extensions: string[]): boolean {
-  const lower = filePath.toLowerCase();
-  return extensions.some(ext => lower.endsWith(ext.toLowerCase()));
+function createProgressBar(total: number) {
+  const columns = (process.stdout.columns && process.stdout.columns > 20)
+    ? Math.min(process.stdout.columns - 30, 40)
+    : 30;
+  let lastRatio = -1;
+
+  const render = (current: number, ctx: { file?: string } = {}) => {
+    const ratio = total > 0 ? Math.min(current / total, 1) : 0;
+    const filled = Math.round(ratio * columns);
+    const bar = chalk.cyan('█'.repeat(filled)) + chalk.gray('░'.repeat(columns - filled));
+    const pct = Math.round(ratio * 100);
+    const file = ctx.file ? chalk.gray(` ${ctx.file}`) : '';
+    // carriage return so it stays on one line, then clear-to-end
+    process.stdout.write(`\r${chalk.bold('Files')} [${bar}] ${chalk.cyan(`${pct}%`)}  (${current}/${total})${file}${' '.repeat(20)}`);
+  };
+
+  render(0);
+
+  return {
+    update(current: number, ctx?: { file?: string }) {
+      if (current < 0) current = 0;
+      const ratio = current / total;
+      // Throttle: only re-render when the visible bar changes or file changes
+      if (ratio - lastRatio >= 1 / columns || current === total) {
+        render(current, ctx);
+        lastRatio = ratio;
+      } else {
+        render(current, ctx);
+      }
+    },
+    stop() {
+      render(total, {});
+      process.stdout.write('\n');
+    },
+  };
 }

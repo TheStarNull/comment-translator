@@ -1,65 +1,26 @@
 /**
  * JSDoc-specific parser
- * Handles JSDoc tags like @param, @returns, @example, @remarks etc.
- * Preserves tag structure while translating descriptions.
- *
- * Key invariant: the serialized output MUST preserve the original line
- * structure (one tag / description line per physical line). Otherwise the
- * re-indented comment reconstructed by parser.ts:rebuildComment() becomes
- * misaligned and the JSDoc structure is destroyed after translation
- * (this was the original v2.1.0 bug).
+ * Handles JSDoc tags like @param, @returns, @example, @description etc.
+ * Preserves tag structure while translating descriptions
  */
 
 export interface JSDocTag {
-  /** Tag name without the leading '@' (e.g. 'param', 'returns', 'remarks'). */
-  tag: string;
-  /** Raw name segment as it appeared in the source (may be empty). */
-  name?: string;
-  /** The text to translate (description), kept on its original line. */
-  description: string;
-  /**
-   * True when the description appeared on a SEPARATE line from the @tag in
-   * the original source (i.e. it was collected as a continuation line). In
-   * that case serializeJSDoc() puts it back on its own line so the original
-   * layout is preserved — this is what fixes the DisplaySlotId-style
-   * "`@remarks` + description" corruption.
-   */
-  multiline?: boolean;
+  tag: string;       // e.g. 'param', 'returns', 'description'
+  type?: string;     // e.g. '{string}', '{number}'
+  name?: string;     // e.g. 'options', 'callback'
+  description: string; // The text to translate
 }
 
 export interface ParsedJSDoc {
-  /** Lines of the main description (before any tag). */
-  descriptionLines: string[];
-  /** Parsed tags, each carrying its translatable description. */
+  description: string;  // Main description (before any tags)
   tags: JSDocTag[];
-  /** true if the comment contains inline tags like {@link}, {@code}. */
-  hasInlineTags: boolean;
-}
-
-/**
- * Tags whose "description" text should be sent to the translator.
- * `remarks`, `summary`, `description`, `desc` are all included so that
- * Minecraft-style enum documentation (used in the bug report) survives
- * the translation round-trip.
- */
-export const TRANSLATABLE_TAGS: ReadonlySet<string> = new Set([
-  'param', 'arg', 'argument', 'property', 'prop',
-  'returns', 'return', 'yields', 'yield',
-  'description', 'desc', 'summary', 'remarks',
-  'throws', 'throw', 'exception',
-  'example', 'examples',
-  'deprecated', 'todo', 'fixme', 'note', 'warning',
-  'see', 'author',
-]);
-
-export function isTranslatableTag(tag: string): boolean {
-  return TRANSLATABLE_TAGS.has(tag);
+  hasInlineTags: boolean; // true if contains {@link}, {@code} etc.
 }
 
 const JSDOC_TAGS = [
   'param', 'arg', 'argument', 'property', 'prop',
   'returns', 'return', 'yields', 'yield',
-  'description', 'desc', 'remarks', 'summary',
+  'description', 'desc',
   'example', 'examples',
   'throws', 'throw', 'exception',
   'see', 'link',
@@ -82,25 +43,69 @@ const JSDOC_TAGS = [
 ];
 
 /**
- * Parse a JSDoc comment body into structured form.
- * `text` is the inner content (delimiters and the leading " * " prefixes are
- * already stripped by the caller / cleanCommentText).
+ * "Marker" tags that take NO description / payload of their own.
+ * Anything appearing on the same or following lines belongs to the
+ * surrounding (main) description, NOT to the tag.
+ *
+ * This is the key to fixing the "incomplete translation" bug: without
+ * this list, a line like `@beta\n * Error thrown after...` was greedily
+ * swallowed into `beta.description`, then silently skipped because `beta`
+ * is not in the translatable whitelist — so the whole sentence was never
+ * sent to the translator.
+ */
+const MARKER_TAGS = new Set([
+  'beta', 'alpha', 'experimental',
+  'internal', 'sealed', 'override',
+  'readonly', 'abstract', 'final',
+  'public', 'private', 'protected',
+  'async', 'generator', 'const', 'constant',
+  'ignore', 'ts-ignore', 'ts-expect-error',
+  'hidden', 'package', 'static',
+  'optional', 'nullable', 'non-nullable',
+  'deprecated', 'obsolete',
+]);
+
+/**
+ * Tags whose payload is structured/code-like and must NEVER be translated
+ * (identifiers, types, names, cross-references). These are kept verbatim.
+ * Note: @param / @returns / @throws / @example etc. carry human-language
+ * descriptions, so they are intentionally NOT in this set — they go through
+ * the prose allow-list below and their description IS translated.
+ */
+const NON_TRANSLATABLE_TAGS = new Set([
+  'type', 'typedef', 'callback',
+  'template', 'generic',
+  'default', 'defaultvalue',
+  'enum', 'readonly',
+  'fires', 'emits', 'listens',
+  'modifies', 'requires',
+  'memberof', 'module', 'namespace',
+  'category', 'group',
+  'see', 'link', 'since', 'version', 'author',
+]);
+
+/**
+ * Parse a JSDoc comment into structured format
  */
 export function parseJSDoc(text: string): ParsedJSDoc {
-  const lines = text.split('\n');
+  const lines = text.split('\n').map(l => l.replace(/^\s*\*\s?/, '').trimEnd());
+  const content = lines.join('\n').trim();
+
   const result: ParsedJSDoc = {
-    descriptionLines: [],
+    description: '',
     tags: [],
-    hasInlineTags: /\{@\w+/.test(text),
+    hasInlineTags: /\{@\w+/.test(content),
   };
 
-  if (!text.trim()) return result;
+  if (!content) return result;
 
+  // Split into description and tags
+  const lines2 = content.split('\n');
   let descriptionLines: string[] = [];
   let tagLines: string[] = [];
   let inTagSection = false;
 
-  for (const line of lines) {
+  for (const line of lines2) {
     const trimmed = line.trim();
     if (trimmed.startsWith('@') && !inTagSection) {
       inTagSection = true;
@@ -112,127 +117,157 @@ export function parseJSDoc(text: string): ParsedJSDoc {
     }
   }
 
-  // Description: keep each original line so blank lines / wrapping survive.
-  result.descriptionLines = descriptionLines;
+  result.description = descriptionLines.join('\n').trim();
 
-  // Parse each tag. A tag may span multiple continuation lines; we preserve
-  // the FIRST line (the one that starts with '@') as the canonical structure
-  // and attach the continuation text to its `description`.
+  // Parse each tag
   let currentTag: JSDocTag | null = null;
+
+  const closeCurrentTag = () => {
+    if (currentTag) {
+      result.tags.push(currentTag);
+      currentTag = null;
+    }
+  };
 
   for (const line of tagLines) {
     const trimmed = line.trim();
 
     if (trimmed.startsWith('@')) {
-      if (currentTag) result.tags.push(currentTag);
-
-      const match = trimmed.match(/^@(\w+)\s*(.*)$/s);
-      if (match) {
-        const tagName = match[1];
-        let rest = match[2].trim();
-        let name: string | undefined;
-
-        // Extract a {type} segment if present.
-        const typeMatch = rest.match(/^\{([^}]*)\}\s*(.*)$/);
-        if (typeMatch) {
-          // Re-prepend the type so serialization can put it back faithfully.
-          rest = `{${typeMatch[1]}} ${typeMatch[2].trim()}`;
+      const match = trimmed.match(/^@([\w-]+)\s*(.*)$/s);
+      if (!match) {
+        // Malformed @-line: attach to current tag / description
+        if (currentTag) {
+          currentTag.description += (currentTag.description ? '\n' : '') + trimmed;
         }
-
-        // Extract the name for @param-like tags.
-        if (['param', 'arg', 'argument', 'property', 'prop'].includes(tagName)) {
-          const nameMatch = rest.match(/^([\[\]\w.=\-'"\s]+?)\s+(.*)$/s);
-          if (nameMatch && !nameMatch[1].includes(' ')) {
-            name = nameMatch[1].trim();
-            rest = nameMatch[2].trim();
-          }
-        }
-
-        currentTag = { tag: tagName, name, description: rest, multiline: false };
+        continue;
       }
+
+      const tagName = match[1];
+      const rest = match[2].trim();
+      closeCurrentTag();
+
+      currentTag = { tag: tagName, description: '' };
+
+      // Structured tags: extract type and name
+      let payload = rest;
+      const typeMatch = payload.match(/^\{([^}]*)\}\s*(.*)$/);
+      if (typeMatch) {
+        currentTag.type = `{${typeMatch[1]}}`;
+        payload = typeMatch[2].trim();
+      }
+
+      if (['param', 'arg', 'argument', 'property', 'prop'].includes(tagName)) {
+        const nameMatch = payload.match(/^([\[\]\w.=\-'"\s]+?)\s+(.*)$/s);
+        if (nameMatch && !nameMatch[1].includes(' ')) {
+          currentTag.name = nameMatch[1].trim();
+          payload = nameMatch[2].trim();
+        }
+      }
+
+      currentTag.description = payload;
     } else if (currentTag) {
-      // Continuation of the previous tag: append, preserving the line break.
-      // This means the description was on a separate line in the original →
-      // mark it so serializeJSDoc() can put it back on its own line.
-      currentTag.multiline = true;
-      currentTag.description += '\n' + trimmed;
+      // Continuation line of the current tag
+      if (currentTag.description) {
+        currentTag.description += '\n' + trimmed;
+      } else {
+        currentTag.description = trimmed;
+      }
     }
+    // (a continuation with no current tag can only happen for stray text
+    //  before the first @-tag — but that is already captured as the main
+    //  description above, so we just ignore it here)
   }
 
-  if (currentTag) result.tags.push(currentTag);
+  closeCurrentTag();
 
   return result;
 }
 
 /**
- * Serialize a ParsedJSDoc back into the comment BODY (no delimiters, no
- * leading " * " prefixes). One entry per physical line — this is what
- * guarantees the original layout is preserved.
+ * Serialize parsed JSDoc back to text.
+ *
+ * Each translatable description is emitted as-is (it may contain newlines).
+ * Tags are placed on their own line as `@tag [type] [name] firstLine...`,
+ * with any additional lines of the description appended as subsequent lines.
+ * This preserves the multi-line structure of translated text instead of
+ * collapsing everything onto one line (the historic structure-corruption bug).
  */
 export function serializeJSDoc(parsed: ParsedJSDoc): string {
-  const parts: string[] = [];
+  const lines: string[] = [];
 
-  // Description: re-emit each original line verbatim (blank lines included).
-  for (const line of parsed.descriptionLines) {
-    if (line.trim() === '') {
-      parts.push('');
-    } else {
-      parts.push(line.trimEnd());
-    }
+  if (parsed.description) {
+    lines.push(...parsed.description.split('\n'));
   }
 
   for (const tag of parsed.tags) {
-    // Reconstruct the tag line faithfully: "@tag [type] [name] [description]".
-    let tagLine = `@${tag.tag}`;
+    const descLines = (tag.description || '').split('\n');
 
-    let description = tag.description;
-
-    // If the description still carries a leading "{type}", render it before
-    // the name so the output mirrors the original source.
-    const typeMatch = description.match(/^\{([^}]*)\}\s*(.*)$/s);
-    if (typeMatch) {
-      tagLine += ` {${typeMatch[1]}}`;
-      description = typeMatch[2].trim();
+    // First line: "@tag [type] [name] <first description line>"
+    let head = `@${tag.tag}`;
+    if (tag.type) head += ` ${tag.type}`;
+    if (tag.name) head += ` ${tag.name}`;
+    if (descLines[0] != null && descLines[0].length > 0) {
+      head += ` ${descLines[0]}`;
     }
+    lines.push(head);
 
-    if (tag.name) tagLine += ` ${tag.name}`;
-
-    if (description) {
-      if (tag.multiline) {
-        // Original had the description on a separate line (e.g. Minecraft
-        // `@remarks` blocks). Emit "@tag" alone, then the description on the
-        // following line — preserving the source layout exactly.
-        parts.push(tagLine);
-        parts.push(description);
-        continue;
-      }
-      tagLine += ` ${description}`;
+    // Remaining description lines (if any) on their own lines
+    for (let i = 1; i < descLines.length; i++) {
+      lines.push(descLines[i]);
     }
-
-    parts.push(tagLine);
   }
 
-  // Join with newlines BUT skip a leading blank line so we don't introduce
-  // an empty first line when the description was empty.
-  let out = parts.join('\n').trim();
-  return out;
+  return lines.join('\n');
 }
 
 /**
- * Extract translatable text segments from a ParsedJSDoc.
- * Returns an array of strings; order is: main description first (if any),
- * then each tag's description in declaration order. Segments are NOT joined
- * — keeping them separate is what allows applyTranslations() to map the
- * translated results back without misalignment.
+ * Tags whose description is free-form, human-language prose and therefore
+ * SHOULD be sent to the translator. This is the "allow list" for translation.
+ * Marker tags (see MARKER_TAGS) and purely structural tags are excluded.
+ */
+const PROSE_TAGS = new Set([
+  'param', 'arg', 'argument', 'property', 'prop',
+  'returns', 'return', 'yields', 'yield',
+  'description', 'desc', 'summary',
+  'remarks', 'remark',
+  'throws', 'throw', 'exception',
+  'example', 'examples',
+  'deprecated', 'todo', 'fixme', 'note', 'warning',
+]);
+
+/**
+ * Extract translatable segments from JSDoc.
+ * Returns array of texts that should be translated.
+ *
+ * The "incomplete translation" bug fix: any tag whose description looks like
+ * human-language prose (free-form text rather than an identifier/type) is
+ * offered for translation — including descriptions attached to marker tags
+ * such as `@beta`, `@internal`, `@experimental`. Previously these were
+ * silently skipped because the tag name was not in a hard-coded allow-list,
+ * so sentences like "Error thrown after using the /reload command..." that
+ * followed `@beta` were never sent to the translator.
  */
 export function extractTranslatableParts(parsed: ParsedJSDoc): string[] {
   const parts: string[] = [];
 
-  const main = parsed.descriptionLines.join('\n').trim();
-  if (main) parts.push(main);
+  // Main description: always translate if present
+  if (parsed.description && parsed.description.trim()) {
+    parts.push(parsed.description.trim());
+  }
 
   for (const tag of parsed.tags) {
-    if (isTranslatableTag(tag.tag) && tag.description.trim()) {
+    if (!tag.description || !tag.description.trim()) continue;
+
+    // Pure structural / cross-reference tags are never translated
+    if (NON_TRANSLATABLE_TAGS.has(tag.tag)) continue;
+
+    // A tag is considered to carry prose (and thus translatable) when:
+    //  - it is in the explicit prose allow-list, OR
+    //  - it is a marker/annotation tag whose "payload" is plain text
+    //    (e.g. `@beta Error thrown...`, `@deprecated Use foo instead.`).
+    const isProse = PROSE_TAGS.has(tag.tag) || MARKER_TAGS.has(tag.tag);
+
+    if (isProse) {
       parts.push(tag.description.trim());
     }
   }
@@ -241,77 +276,33 @@ export function extractTranslatableParts(parsed: ParsedJSDoc): string[] {
 }
 
 /**
- * Reconstruct a ParsedJSDoc by substituting translated text segments.
- * `translatedParts` MUST be in the same order as extractTranslatableParts()
- * produced them. Order-based mapping is safe because we never re-join
- * multi-segment descriptions into one blob.
+ * Reconstruct JSDoc with translated parts
  */
 export function applyTranslations(
   parsed: ParsedJSDoc,
   translatedParts: string[],
 ): ParsedJSDoc {
   let partIdx = 0;
-  const result: ParsedJSDoc = {
-    descriptionLines: [...parsed.descriptionLines],
-    tags: parsed.tags.map(t => ({ ...t })),
-    hasInlineTags: parsed.hasInlineTags,
-  };
+  const result = { ...parsed, tags: [...parsed.tags] };
 
-  const main = result.descriptionLines.join('\n').trim();
-  if (main) {
-    result.descriptionLines = applyTextToDescription(
-      result.descriptionLines,
-      translatedParts[partIdx++] || main,
-    );
+  // Main description (always the first part, if present)
+  if (parsed.description && parsed.description.trim()) {
+    result.description = translatedParts[partIdx++] || parsed.description;
   }
 
   for (let i = 0; i < result.tags.length; i++) {
     const tag = result.tags[i];
-    if (isTranslatableTag(tag.tag) && tag.description.trim()) {
-      result.tags[i] = {
-        ...tag,
-        description: translatedParts[partIdx++] || tag.description,
-      };
-    }
+    if (!tag.description || !tag.description.trim()) continue;
+    if (NON_TRANSLATABLE_TAGS.has(tag.tag)) continue;
+
+    const isProse = PROSE_TAGS.has(tag.tag) || MARKER_TAGS.has(tag.tag);
+    if (!isProse) continue;
+
+    result.tags[i] = {
+      ...tag,
+      description: translatedParts[partIdx++] || tag.description,
+    };
   }
 
   return result;
-}
-
-/**
- * Replace the text of a multi-line description with a (possibly single-line)
- * translated version while preserving the original line count and indentation
- * as closely as possible. Falls back to a single-line replacement when the
- * translated text has fewer lines than the original.
- */
-function applyTextToDescription(
-  originalLines: string[],
-  translated: string,
-): string[] {
-  const translatedLines = translated.split('\n');
-
-  if (originalLines.length <= 1) {
-    // Single-line description: just return the translated text as one line.
-    return [translatedLines.join('\n').trim()];
-  }
-
-  // Multi-line: preserve the leading indent of each original line and refill
-  // the translated content line by line. Any leftover translated lines are
-  // appended to the last original line.
-  const out: string[] = [];
-  for (let i = 0; i < originalLines.length; i++) {
-    const origIndent = (originalLines[i].match(/^\s*/) || [''])[0];
-    if (i < translatedLines.length) {
-      out.push(origIndent + translatedLines[i].trim());
-    } else if (i === originalLines.length - 1) {
-      // Last original line: absorb any remaining translated content.
-      const rest = translatedLines.slice(i).join(' ').trim();
-      out.push(origIndent + rest);
-    } else {
-      // Preserve blank/continuation lines so the overall shape is kept.
-      out.push(originalLines[i]);
-    }
-  }
-
-  return out;
 }

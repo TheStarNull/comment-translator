@@ -11,7 +11,7 @@ const program = new Command();
 program
   .name('comment-translator')
   .description('Translate JSDoc and code comments using DeepL (Free/Pro) API\nSupports: .js, .ts, .jsx, .tsx, .mjs, .cjs')
-  .version('2.1.1');
+  .version('2.1.2');
 
 program
   .argument('<input>', 'Input file or directory to process')
@@ -27,9 +27,9 @@ program
   .option('--extensions <exts>', 'Comma-separated file extensions', '.js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts')
   .option('--no-recursive', 'Disable recursive directory traversal')
   .option('--dry-run', 'Preview without writing files')
+  .option('--progress', 'Show a progress bar while translating (default: on)')
+  .option('--no-progress', 'Disable the progress bar')
   .option('-v, --verbose', 'Verbose output')
-  .option('--progress', 'Show a progress bar while translating (default: true unless -v is set)')
-  .option('--no-progress', 'Hide the progress bar')
   .action(async (input: string, options: any) => {
     try {
       // Validate input
@@ -78,8 +78,7 @@ program
         recursive: options.recursive !== false,
         dryRun: options.dryRun || false,
         verbose: options.verbose || false,
-        // Default to showing the bar; --verbose implies structured logs instead.
-        progress: options.progress !== false && !options.verbose,
+        progress: options.progress !== false,
       });
 
       console.log(chalk.bold('🚀 Comment Translator (DeepL)'));

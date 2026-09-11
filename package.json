@@ -1,6 +1,6 @@
 {
   "name": "comment-translator",
-  "version": "2.1.1",
+  "version": "2.1.2",
   "description": "Translate JSDoc and code comments using DeepL (Free/Pro) API. Supports TS/JS/JSX.",
   "main": "dist/cli.js",
   "bin": {
