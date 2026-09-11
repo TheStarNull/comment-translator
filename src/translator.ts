@@ -250,15 +250,15 @@ export class DeepLTranslator implements ITranslator {
 /*  Backend registry / factory                                        */
 /* ================================================================== */
 
-/** Translation backend identifiers supported by `--backend`. */
-export type BackendName = 'deepl' | 'google' | 'libretranslate';
+/** LibreTranslate-specific options (used by `createTranslator`). */
+export type BackendName = 'deepl' | 'google' | 'libretranslate' | 'mock';
 
 /** Normalize a CLI value into a known BackendName; throws on unknown input. */
 export function parseBackend(value: string | undefined, fallback: BackendName = 'deepl'): BackendName {
   const v = (value ?? fallback).trim().toLowerCase();
-  if (v === 'deepl' || v === 'google' || v === 'libretranslate') return v;
+  if (v === 'deepl' || v === 'google' || v === 'libretranslate' || v === 'mock') return v;
   throw new Error(
-    `Unknown --backend "${value}". Supported values: deepl, google, libretranslate.`
+    `Unknown --backend "${value}". Supported values: deepl, google, libretranslate, mock.`
   );
 }
 
@@ -286,8 +286,32 @@ export interface CreateTranslatorOptions {
   credentialsPath?: string;
   /** Google only: 'base' | 'nmt'. */
   googleModel?: 'base' | 'nmt';
-  /** LibreTranslate only: custom server URL (e.g. http://localhost:5000). */
-  libretranslateUrl?: string;
+  /** LibreTranslate only: base URL of the instance (e.g. "http://localhost:5000"). */
+  libreTranslateUrl?: string;
+  /** LibreTranslate only: API key for protected instances. */
+  libreTranslateApiKey?: string;
+  /** LibreTranslate only: request timeout in ms (default 30000). */
+  libreTranslateTimeout?: number;
+
+  /**
+   * Translation cache (resume-after-interruption / de-dupe across runs).
+   * When set, the returned translator is wrapped in a CachedTranslator that
+   * persists every translated segment to disk. Re-running the same command
+   * will serve finished segments from the cache instead of re-calling the API.
+   *
+   *   cache: { cacheDir: '.comment-translator-cache', disabled: false }
+   *
+   * The cache is keyed by (backend + sourceLang + targetLang + sourceText),
+   * so different language pairs / backends never collide.
+   */
+  cache?: {
+    /** Cache directory. Defaults to '.comment-translator-cache'. */
+    cacheDir?: string;
+    /** Set true to bypass the cache entirely (still won't be written to). */
+    disabled?: boolean;
+    /** When true, drop the entire cache before translating (start fresh). */
+    clear?: boolean;
+  };
 }
 
 /**
@@ -297,40 +321,92 @@ export interface CreateTranslatorOptions {
 export function createTranslator(opts: CreateTranslatorOptions = {}): ITranslator {
   const backend = parseBackend(opts.backend);
 
+  // 1. Build the raw (uncached) translator for the requested backend.
+  //    Each branch is lazy-required so users of one backend never pull the
+  //    dependencies of another.
+  let raw: ITranslator;
+
   if (backend === 'google') {
-    // Lazy require so DeepL-only users do not pull in Google-specific code.
     const { GoogleTranslator } = require('./google-translator') as {
       GoogleTranslator: new (o: any) => ITranslator;
     };
-    return new GoogleTranslator({
+    raw = new GoogleTranslator({
       apiKey: opts.apiKey ?? process.env.GOOGLE_API_KEY,
       credentialsPath: opts.credentialsPath ?? process.env.GOOGLE_APPLICATION_CREDENTIALS,
       targetLang: opts.targetLang,
       sourceLang: opts.sourceLang,
       model: opts.googleModel,
     });
-  }
-
-  if (backend === 'libretranslate') {
-    // Lazy require — LibreTranslate is an optional dependency.
-    const { LibreTranslateTranslator } = require('./libretranslate') as {
+  } else if (backend === 'libretranslate') {
+    const { LibreTranslateTranslator } = require('./libretranslate-translator') as {
       LibreTranslateTranslator: new (o: any) => ITranslator;
     };
-    return new LibreTranslateTranslator({
-      endpoint: opts.libretranslateUrl,
-      apiKey: opts.apiKey ?? process.env.LIBRETRANSLATE_API_KEY,
+    raw = new LibreTranslateTranslator({
+      baseUrl: opts.libreTranslateUrl ?? process.env.LIBRETRANSLATE_URL,
+      apiKey: opts.libreTranslateApiKey ?? process.env.LIBRETRANSLATE_API_KEY,
+      timeout: opts.libreTranslateTimeout,
       targetLang: opts.targetLang,
       sourceLang: opts.sourceLang,
     });
+  } else {
+    // Default: DeepL (historical behaviour, preserved for backward compat).
+    raw = new DeepLTranslator({
+      apiKey: opts.apiKey ?? process.env.DEEPL_API_KEY,
+      targetLang: opts.targetLang,
+      sourceLang: opts.sourceLang,
+      free: opts.free,
+      formality: opts.formality,
+      glossaryId: opts.glossaryId,
+    });
   }
 
-  // Default: DeepL (historical behaviour, preserved for backward compat).
-  return new DeepLTranslator({
-    apiKey: opts.apiKey ?? process.env.DEEPL_API_KEY,
-    targetLang: opts.targetLang,
-    sourceLang: opts.sourceLang,
-    free: opts.free,
-    formality: opts.formality,
-    glossaryId: opts.glossaryId,
-  });
+  // 2. Optionally wrap with a disk-backed cache for resume-after-interruption
+  //    and cross-run de-duplication. This is backend-agnostic: the same
+  //    CachedTranslator works for DeepL, Google, and LibreTranslate alike.
+  //    The wrapping happens HERE (at the factory level) so that every caller
+  //    — CLI, programmatic API, tests — gets caching automatically without
+  //    having to remember to decorate the translator themselves.
+  const cacheCfg = opts.cache;
+  if (cacheCfg && !cacheCfg.disabled) {
+    const { CachedTranslator } = require('./cached-translator') as {
+      CachedTranslator: new (
+        inner: ITranslator,
+        o: {
+          cacheDir: string;
+          backend: string;
+          sourceLang: string;
+          targetLang: string;
+        }
+      ) => ITranslator;
+    };
+
+    if (cacheCfg.clear) {
+      // Lazy-import to avoid a hard dependency for callers that never cache.
+      const { TranslationCache } = require('./translation-cache') as {
+        TranslationCache: new (o: { cacheDir: string; backend: string; targetLang: string }) => {
+          clear: () => void;
+        };
+      };
+      // Best-effort: clear the relevant cache file before wrapping.
+      try {
+        const tmp = new TranslationCache({
+          cacheDir: cacheCfg.cacheDir ?? '.comment-translator-cache',
+          backend,
+          targetLang: (opts.targetLang ?? 'ZH').toLowerCase(),
+        });
+        tmp.clear();
+      } catch {
+        /* ignore — a missing/unreadable cache is not fatal */
+      }
+    }
+
+    raw = new CachedTranslator(raw, {
+      cacheDir: cacheCfg.cacheDir ?? '.comment-translator-cache',
+      backend,
+      sourceLang: opts.sourceLang || 'auto',
+      targetLang: (opts.targetLang ?? 'ZH').toLowerCase(),
+    });
+  }
+
+  return raw;
 }

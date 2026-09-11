@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
-import { ITranslator, DeepLTranslator } from './translator';
+import { ITranslator, DeepLTranslator, createTranslator } from './translator';
 import { extractComments, cleanCommentText, restoreComments, ExtractedComment } from './parser';
 import { parseJSDoc, extractTranslatableParts, applyTranslations, serializeJSDoc } from './jsdoc-parser';
 import { TermProtector, TermProtectorOptions } from './term-protector';
@@ -28,6 +28,17 @@ export interface EngineConfig {
   progress?: boolean;
   /** Terminology protection options (see ./term-protector). */
   terms?: TermProtectorOptions;
+  /** 翻译缓存配置（断点续跑）。省略则禁用缓存。 */
+  cache?: {
+    /** 缓存目录，默认 .comment-translator-cache */
+    cacheDir?: string;
+    /** 是否禁用缓存（默认 false） */
+    disabled?: boolean;
+  };
+  /** 引擎标识（用于缓存文件命名） */
+  backend?: string;
+  /** 目标语言（缓存键的一部分） */
+  targetLang?: string;
 }
 
 const DEFAULT_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.d.ts'];
@@ -73,11 +84,15 @@ class ProgressBar {
 /* ------------------------------------------------------------------ */
 
 export class TranslationEngine {
-  private config: (Required<Omit<EngineConfig, 'output' | 'terms'>> & {
+  private config: (Omit<Required<Omit<EngineConfig, 'output' | 'terms' | 'cache' | 'backend'>>, 'targetLang'> & {
     output?: string;
     terms?: TermProtectorOptions;
+    cache?: { cacheDir?: string; disabled?: boolean };
+    backend?: string;
+    targetLang?: string;
   });
   private protector: TermProtector | null = null;
+  private translator: ITranslator;
   private stats = {
     filesProcessed: 0,
     filesSkipped: 0,
@@ -97,8 +112,18 @@ export class TranslationEngine {
       ...config,
     };
 
+    // Keep a reference to the (possibly cached) translator for later use.
+    this.translator = config.translator;
+
     // Lazily created on first use; null when no protection is configured.
     this.protector = this.config.terms ? new TermProtector(this.config.terms) : null;
+
+    // The translator passed in is expected to ALREADY include the cache
+    // decorator — createTranslator() in translator.ts wraps the raw backend
+    // with CachedTranslator when opts.cache is set. That single wrapping point
+    // avoids double-caching (which would corrupt hit-rate stats and waste
+    // lookups). We just keep a reference here and flush it on shutdown.
+    this.translator = config.translator;
   }
 
   /**
@@ -128,6 +153,13 @@ export class TranslationEngine {
 
     this.finishProgress();
     this.printStats();
+
+    // Flush pending cache writes to disk so nothing is lost after normal exit.
+    // (Only relevant when the translator is cache-wrapped; harmless otherwise.)
+    const t = this.translator as any;
+    if (typeof t.flush === 'function') {
+      t.flush();
+    }
   }
 
   /** Walk the directory tree and return every file matching the configured extensions. */
@@ -373,6 +405,13 @@ export class TranslationEngine {
     }
     if (this.stats.errors > 0) {
       console.log(`  Errors:             ${chalk.red(this.stats.errors)}`);
+    }
+    // Duck-type check: the translator may be a CachedTranslator (when caching
+    // is enabled) or a plain backend. Both expose translate/translateBatch;
+    // only the cached variant has flush/printStats.
+    const t = this.translator as any;
+    if (typeof t.printStats === 'function') {
+      t.printStats();
     }
     console.log(chalk.gray('─'.repeat(40)));
   }

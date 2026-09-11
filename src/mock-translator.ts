@@ -11,14 +11,22 @@ import { ITranslator } from './translator';
 export class MockTranslator implements ITranslator {
   private targetLanguage: string;
   private sourceLanguage?: string;
+  /** Counts real translate calls — useful for verifying cache hit/miss. */
+  public callCount = 0;
 
   constructor(config: { targetLanguage: string; sourceLanguage?: string }) {
     this.targetLanguage = config.targetLanguage;
     this.sourceLanguage = config.sourceLanguage;
   }
 
+  /** Reset the call counter (used by tests). */
+  reset(): void {
+    this.callCount = 0;
+  }
+
   /** ITranslator-compatible single translate (target is optional, mock ignores it). */
   async translate(text: string, _target?: string): Promise<string> {
+    this.callCount++;
     return this.mockTranslate(text);
   }
 
@@ -28,6 +36,7 @@ export class MockTranslator implements ITranslator {
   }
 
   async translateBatch(texts: string[], _target?: string): Promise<string[]> {
+    this.callCount += texts.length;
     return texts.map(t => this.mockTranslate(t));
   }
 

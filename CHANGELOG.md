@@ -1,11 +1,19 @@
 # Changelog
 
-## [2.3.1] - 2026-09-11
+## [2.4.0] - 2026-09-11
 
 ### Added
-- **LibreTranslate 后端支持** — 新增 `--backend libretranslate` 选项，完全免费、支持自托管。新增文件 `src/libretranslate.ts`，通过 `ITranslator` 接口无缝集成。支持 `--libre-url`（自定义服务地址）和 `--libre-key`（API Key）参数。
+- **翻译缓存（断点续跑）**: 所有翻译后端（DeepL / Google / LibreTranslate）现在默认支持磁盘缓存。
+  - 以「源文 + 源语言 + 目标语言 + 后端」为 key，不同语言对 / 后端互不干扰。
+  - 持久化为 JSONL（追加写 + 进程退出前 `flushSync`），中断后重跑同一命令即可从已完成处继续，无需重翻。
+  - 集成点统一提升到 `createTranslator()` 工厂，调用方（CLI / 程序化 API）自动获得缓存，无需手动装饰。
+- **`--libretranslate` 后端正式接入工厂**: `--backend libretranslate` 现在真正可用（此前会抛 "Unknown backend"）；新增 `--libre-url` / `--libre-key` CLI 参数。
+- **缓存 CLI 选项**: `--cache-dir <path>`（默认 `.comment-translator-cache`）、`--no-cache`（禁用）、`--clear-cache`（清空后重跑）。
 
-### Fixed
+### Changed
+- 版本号升至 2.4.0。
+
+## [2.3.1] - 2026-09-11
 
 ### Fixed
 - **翻译不完全 (Translation incomplete)**: 修复了多行 JSDoc 标签描述（如 `@remarks`、`@param`、`@throws`）在翻译后丢失行结构的问题。现在翻译后的描述会保留原始的多行排版。

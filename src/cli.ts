@@ -18,10 +18,10 @@ const program = new Command();
 program
   .name('comment-translator')
   .description(
-    'Translate JSDoc and code comments using DeepL / Google Translate / LibreTranslate\n' +
+    'Translate JSDoc and code comments using DeepL / Google Translate API\n' +
       'Supports: .js, .ts, .jsx, .tsx, .mjs, .cjs'
   )
-  .version('2.3.1');
+  .version('2.4.0');
 
 const BACKEND_CHOICES = ['deepl', 'google', 'libretranslate'] as const;
 
@@ -42,8 +42,8 @@ program
   .option('--glossary <id>', 'DeepL only: glossary ID for consistent terminology')
   .option('--google-model <model>', 'Google only: base | nmt (default: nmt)')
   .option('--google-credentials <path>', 'Google only: service-account key.json path')
-  .option('--libre-url <url>', 'LibreTranslate only: server URL (default: https://libretranslate.com)')
-  .option('--libre-key <key>', 'LibreTranslate only: API key (optional for public instances)')
+  .option('--libre-url <url>', 'LibreTranslate only: base URL (e.g. "http://localhost:5000"). Defaults to $LIBRETRANSLATE_URL or http://localhost:5000')
+  .option('--libre-key <key>', 'LibreTranslate only: API key for protected instances ($LIBRETRANSLATE_API_KEY)')
   .option('--mock', 'Use MockTranslator instead of real API (for testing)')
   .option('--extensions <exts>', 'Comma-separated file extensions', '.js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts')
   .option('--no-recursive', 'Disable recursive directory traversal')
@@ -56,6 +56,9 @@ program
   .option('--no-protect-identifiers', 'Disable auto-protection of code identifiers (camelCase/PascalCase/snake_case)')
   .option('--no-protect-urls', 'Do not protect URLs in comments')
   .option('--no-protect-code-spans', 'Do not protect `backtick` code spans')
+  .option('--cache-dir <path>', 'Translation cache directory (default: .comment-translator-cache)', '.comment-translator-cache')
+  .option('--no-cache', 'Disable translation cache (each run re-translates everything)')
+  .option('--clear-cache', 'Clear the cache before running (starts fresh)')
   .action(async (input: string, options: any) => {
     try {
       // Validate input
@@ -68,6 +71,8 @@ program
       const backend = parseBackend(options.backend as string | undefined, 'deepl');
 
       // Resolve which API key env var belongs to the selected backend.
+      // LibreTranslate typically needs no key for self-hosted/local instances,
+      // so it is intentionally excluded from the "must have a key" check below.
       const apiKeyEnv =
         backend === 'google' ? 'GOOGLE_API_KEY'
         : backend === 'libretranslate' ? 'LIBRETRANSLATE_API_KEY'
@@ -76,12 +81,18 @@ program
 
       // Build translator
       let translator: ITranslator;
+      // Mock when explicitly requested, OR when no credentials are available.
+      // LibreTranslate at "localhost:5000" counts as configured even without a key,
+      // so we don't force-mock it (unlike DeepL/Google which always need auth).
+      const hasLibreConfig =
+        backend === 'libretranslate' &&
+        (apiKey || process.env.LIBRETRANSLATE_URL || options.libreUrl);
       const useMock =
         options.mock ||
         (!apiKey &&
           backend !== 'google' &&
           !process.env.GOOGLE_APPLICATION_CREDENTIALS &&
-          backend !== 'libretranslate');
+          !hasLibreConfig);
 
       if (useMock) {
         if (!options.mock) {
@@ -104,7 +115,14 @@ program
           glossaryId: options.glossary,
           credentialsPath: options.googleCredentials,
           googleModel: options.googleModel,
-          libretranslateUrl: options.libreUrl,
+          // LibreTranslate-specific options
+          libreTranslateUrl: options.libreUrl,
+          libreTranslateApiKey: apiKey || undefined,
+          // Cache (resume-after-interruption). When --no-cache is passed,
+          // engine.config.cache is { disabled: true } and we skip it here too.
+          cache: options.cache === false
+            ? { disabled: true }
+            : { cacheDir: options.cacheDir || '.comment-translator-cache', clear: !!options.clearCache },
         });
       }
 
@@ -136,7 +154,20 @@ program
         // Default to showing the bar; --verbose implies structured logs instead.
         progress: options.progress !== false && !options.verbose,
         terms: hasTerms ? termsOpts : undefined,
+        cache: options.cache === false
+          ? { disabled: true }
+          : { cacheDir: options.cacheDir || '.comment-translator-cache' },
+        backend,
       });
+
+      // --clear-cache: wipe cache directory before running
+      if (options.clearCache) {
+        const cacheDir = options.cacheDir || '.comment-translator-cache';
+        if (fs.existsSync(cacheDir)) {
+          fs.rmSync(cacheDir, { recursive: true, force: true });
+        }
+        console.log(chalk.yellow(`   Cleared cache: ${cacheDir}\n`));
+      }
 
       console.log(chalk.bold(`🚀 Comment Translator (${backend === 'google' ? 'Google' : backend === 'libretranslate' ? 'LibreTranslate' : 'DeepL'})`));
       console.log(chalk.gray(`   Input:     ${input}`));
@@ -148,6 +179,8 @@ program
       if (options.source) console.log(chalk.gray(`   Source:    ${options.source}`));
       if (options.output) console.log(chalk.gray(`   Output:    ${options.output}`));
       if (options.dryRun) console.log(chalk.yellow('   Mode:      DRY RUN (no files written)'));
+      if (options.cache === false) console.log(chalk.gray('   Cache:     disabled (--no-cache)'));
+      else console.log(chalk.gray(`   Cache:     ${options.cacheDir || '.comment-translator-cache'}`));
       console.log('');
 
       await engine.run();
@@ -192,22 +225,31 @@ program.on('--help', () => {
   console.log('  $ export GOOGLE_APPLICATION_CREDENTIALS="./key.json"');
   console.log('  $ comment-translator ./src --backend google --target ja');
   console.log('');
-  console.log('  # Use LibreTranslate (FREE, self-hosted or public instance)');
-  console.log('  $ comment-translator ./src --backend libretranslate --target zh -o ./out');
-  console.log('  # LibreTranslate with custom server (self-hosted Docker)');
-  console.log('  $ comment-translator ./src --backend libretranslate --libre-url http://localhost:5000 --target zh');
-  console.log('  # LibreTranslate with API key (required by some public instances)');
-  console.log('  $ export LIBRETRANSLATE_API_KEY="your-api-key"');
-  console.log('  $ comment-translator ./src --backend libretranslate --target en');
+  console.log('  # LibreTranslate — local (no key needed) + translation cache');
+  console.log('  $ docker run -d -p 5000:5000 libretranslate/libretranslate');
+  console.log('  $ comment-translator ./src --backend libretranslate --target zh --cache-dir .cache');
+  console.log('  # LibreTranslate — public/protected instance');
+  console.log('  $ export LIBRETRANSLATE_API_KEY="..."');
+  console.log('  $ comment-translator ./src --backend libretranslate --libre-url https://libretranslate.com --target en');
   console.log('');
   console.log('Environment variables:');
   console.log('  DEEPL_API_KEY              DeepL API key (:fx = Free, else Pro)');
   console.log('  GOOGLE_API_KEY             Google Cloud API key');
   console.log('  GOOGLE_APPLICATION_CREDENTIALS  Path to a Google service-account key.json');
-  console.log('  LIBRETRANSLATE_API_KEY     LibreTranslate API key (if required by the instance)');
-  console.log('  LIBRETRANSLATE_URL         LibreTranslate server URL (default: https://libretranslate.com)');
   console.log('  DEEPL_FREE                 Set "true" to force DeepL Free endpoint');
   console.log('');
+  console.log('Translation cache (resume after interruption):');
+  console.log('  --cache-dir <path>         Cache directory (default: .comment-translator-cache)');
+  console.log('  --no-cache                 Disable cache (re-translate everything)');
+  console.log('  --clear-cache              Clear cache before running (start fresh)');
+  console.log('');
+  console.log('  # Resumable run: translate once, interrupt, re-run → cache hits');
+  console.log('  $ comment-translator ./src --backend libretranslate --target zh --cache-dir .cache');
+  console.log('  $ comment-translator ./src --backend libretranslate --target zh --cache-dir .cache');
+  console.log('  # Force re-translation (ignore existing cache)');
+  console.log('  $ comment-translator ./src --no-cache --target zh');
+  console.log('  # Start fresh (clear cache + translate everything)');
+  console.log('  $ comment-translator ./src --clear-cache --target zh');
   console.log('Glossary file (JSON):');
   console.log('  { "terms": ["DisplaySlotId", "scoreboard"], "identifiers": true }');
   console.log('  See src/term-protector.ts for the full schema.');

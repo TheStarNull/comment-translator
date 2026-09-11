@@ -9,9 +9,8 @@
 - 🔍 **智能解析** — 精确提取 JSDoc、块注释、行注释
 - 🏷️ **JSDoc 感知** — 识别 `@param` `@returns` `@example` `@beta` `@remarks` 等标签，只翻译描述部分，保留类型与参数名
 - 📦 **批量翻译** — 自动合并文本进行批量 API 调用，提高效率
-- 🌍 **多后端** — **DeepL**（默认，质量优先）／**Google**（覆盖广、价格低）／**LibreTranslate**（免费开源，可自托管），用 `--backend` 切换；新增后端只需实现一个类
-- 🆓 **LibreTranslate 支持 (v2.3.1)** — 完全免费、无需 API Key（部分公共实例）、支持自托管（`docker run -p 5000:5000 libretranslate/libretranslate`），`--backend libretranslate` 即可启用
-- 🌍 **多语言支持** — 取决于所选后端：DeepL 支持 ZH/ZH-HANT/EN/JA/KO/DE/FR/ES/RU/PT-BR 等；Google 支持 130+ 语言（zh-CN / zh-TW / ja / ko ...）；LibreTranslate 支持 30+ 语言（zh / en / ja / ko / de / fr ...）
+- 🌍 **多后端** — **DeepL**（默认，质量优先）／**Google**（覆盖广、价格低），用 `--backend` 切换；新增后端只需实现一个类
+- 🌍 **多语言支持** — 取决于所选后端：DeepL 支持 ZH/ZH-HANT/EN/JA/KO/DE/FR/ES/RU/PT-BR 等；Google 支持 130+ 语言（zh-CN / zh-TW / ja / ko ...）
 - 📁 **目录递归** — 支持单文件或整个目录批量处理
 - 🎯 **格式保持** — 翻译后保持原始缩进、星号前缀等格式
 - 🧪 **Mock 模式** — 内置模拟翻译器，无需 API Key 即可测试
@@ -72,42 +71,6 @@ node dist/cli.js ./src --backend google --target zh-CN --source en --google-mode
 ```
 
 > 💡 选择建议：**主要语言 + 翻译质量优先 → DeepL**；**小语种 / 多语言覆盖广 / 成本敏感 → Google**（Google 每百万字符约 \$20，DeepL Pro 约 \$25+固定费）。
-
-### 方式四：LibreTranslate（`--backend libretranslate`）🆓
-
-LibreTranslate 是 **100% 免费开源**的翻译引擎，无需 API Key 即可使用公共实例，也可以自行 Docker 部署。
-
-**选项 A：使用公共实例（无需注册）**
-
-```bash
-# 直接使用（无需 API Key）
-node dist/cli.js ./src --backend libretranslate --target zh -o ./out
-```
-
-**选项 B：自托管（推荐，无速率限制）**
-
-```bash
-# 1. 启动 LibreTranslate 服务
-docker run -d -p 5000:5000 libretranslate/libretranslate
-
-# 2. 指定本地服务地址
-node dist/cli.js ./src --backend libretranslate --libre-url http://localhost:5000 --target zh
-```
-
-**选项 C：使用带 API Key 的公共实例**
-
-```bash
-export LIBRETRANSLATE_API_KEY="your-api-key"
-node dist/cli.js ./src --backend libretranslate --target en
-```
-
-| 公共实例 | URL | API Key |
-|----------|-----|---------|
-| LibreTranslate.com | https://libretranslate.com | 需要 |
-| Argos OpenTech | https://translate.argosopentech.com | 不需要 |
-| libretranslate.de | https://libretranslate.de | 不需要 |
-
-> 💡 LibreTranslate 支持 30+ 语言（zh / en / ja / ko / de / fr / es / ru ...），语言代码统一用小写（如 `zh`、`en`、`ja`）。
 
 ### 方式三：Mock 模式（无需 API Key）
 
