@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.4.1] - 2026-09-11
+### Docs
+- 重写 README：补全 LibreTranslate / Google 用法、缓存断点续跑说明、完整 CLI 参数表、项目结构与 FAQ
+- 移除已过时的示例与占位内容
+
 ## [2.4.0] - 2026-09-11
 
 ### Added
