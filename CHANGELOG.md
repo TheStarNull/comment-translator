@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.4.2] - 2026-09-11
+### Docs
+- 合并主线 README 与 v2.4.x 新功能：将 DeepL/Google 详细术语保护、常见问题排查等完整内容，与 LibreTranslate 后端、翻译缓存断点续跑整合为统一文档
+- 新增 Minecraft Bedrock API 结构保留示例、完整 CLI 参数表（含 `--libre-*` / `--cache-*`）、三后端对照的快速开始
+- 项目结构同步到实际文件（libretranslate-translator / cached-translator / translation-cache 等）
+
 ## [2.4.1] - 2026-09-11
 ### Docs
 - 重写 README：补全 LibreTranslate / Google 用法、缓存断点续跑说明、完整 CLI 参数表、项目结构与 FAQ
