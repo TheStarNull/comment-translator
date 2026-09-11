@@ -251,14 +251,14 @@ export class DeepLTranslator implements ITranslator {
 /* ================================================================== */
 
 /** Translation backend identifiers supported by `--backend`. */
-export type BackendName = 'deepl' | 'google';
+export type BackendName = 'deepl' | 'google' | 'libretranslate';
 
 /** Normalize a CLI value into a known BackendName; throws on unknown input. */
 export function parseBackend(value: string | undefined, fallback: BackendName = 'deepl'): BackendName {
   const v = (value ?? fallback).trim().toLowerCase();
-  if (v === 'deepl' || v === 'google') return v;
+  if (v === 'deepl' || v === 'google' || v === 'libretranslate') return v;
   throw new Error(
-    `Unknown --backend "${value}". Supported values: deepl, google.`
+    `Unknown --backend "${value}". Supported values: deepl, google, libretranslate.`
   );
 }
 
@@ -286,6 +286,8 @@ export interface CreateTranslatorOptions {
   credentialsPath?: string;
   /** Google only: 'base' | 'nmt'. */
   googleModel?: 'base' | 'nmt';
+  /** LibreTranslate only: custom server URL (e.g. http://localhost:5000). */
+  libretranslateUrl?: string;
 }
 
 /**
@@ -306,6 +308,19 @@ export function createTranslator(opts: CreateTranslatorOptions = {}): ITranslato
       targetLang: opts.targetLang,
       sourceLang: opts.sourceLang,
       model: opts.googleModel,
+    });
+  }
+
+  if (backend === 'libretranslate') {
+    // Lazy require — LibreTranslate is an optional dependency.
+    const { LibreTranslateTranslator } = require('./libretranslate') as {
+      LibreTranslateTranslator: new (o: any) => ITranslator;
+    };
+    return new LibreTranslateTranslator({
+      endpoint: opts.libretranslateUrl,
+      apiKey: opts.apiKey ?? process.env.LIBRETRANSLATE_API_KEY,
+      targetLang: opts.targetLang,
+      sourceLang: opts.sourceLang,
     });
   }
 

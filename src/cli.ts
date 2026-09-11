@@ -18,12 +18,12 @@ const program = new Command();
 program
   .name('comment-translator')
   .description(
-    'Translate JSDoc and code comments using DeepL / Google Translate API\n' +
+    'Translate JSDoc and code comments using DeepL / Google Translate / LibreTranslate\n' +
       'Supports: .js, .ts, .jsx, .tsx, .mjs, .cjs'
   )
-  .version('2.3.0');
+  .version('2.3.1');
 
-const BACKEND_CHOICES = ['deepl', 'google'] as const;
+const BACKEND_CHOICES = ['deepl', 'google', 'libretranslate'] as const;
 
 program
   .argument('<input>', 'Input file or directory to process')
@@ -42,6 +42,8 @@ program
   .option('--glossary <id>', 'DeepL only: glossary ID for consistent terminology')
   .option('--google-model <model>', 'Google only: base | nmt (default: nmt)')
   .option('--google-credentials <path>', 'Google only: service-account key.json path')
+  .option('--libre-url <url>', 'LibreTranslate only: server URL (default: https://libretranslate.com)')
+  .option('--libre-key <key>', 'LibreTranslate only: API key (optional for public instances)')
   .option('--mock', 'Use MockTranslator instead of real API (for testing)')
   .option('--extensions <exts>', 'Comma-separated file extensions', '.js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts')
   .option('--no-recursive', 'Disable recursive directory traversal')
@@ -66,13 +68,20 @@ program
       const backend = parseBackend(options.backend as string | undefined, 'deepl');
 
       // Resolve which API key env var belongs to the selected backend.
-      const apiKeyEnv = backend === 'google' ? 'GOOGLE_API_KEY' : 'DEEPL_API_KEY';
+      const apiKeyEnv =
+        backend === 'google' ? 'GOOGLE_API_KEY'
+        : backend === 'libretranslate' ? 'LIBRETRANSLATE_API_KEY'
+        : 'DEEPL_API_KEY';
       const apiKey = options.apiKey || process.env[apiKeyEnv] || '';
 
       // Build translator
       let translator: ITranslator;
       const useMock =
-        options.mock || (!apiKey && backend !== 'google' && !process.env.GOOGLE_APPLICATION_CREDENTIALS);
+        options.mock ||
+        (!apiKey &&
+          backend !== 'google' &&
+          !process.env.GOOGLE_APPLICATION_CREDENTIALS &&
+          backend !== 'libretranslate');
 
       if (useMock) {
         if (!options.mock) {
@@ -95,6 +104,7 @@ program
           glossaryId: options.glossary,
           credentialsPath: options.googleCredentials,
           googleModel: options.googleModel,
+          libretranslateUrl: options.libreUrl,
         });
       }
 
@@ -128,7 +138,7 @@ program
         terms: hasTerms ? termsOpts : undefined,
       });
 
-      console.log(chalk.bold(`🚀 Comment Translator (${backend === 'google' ? 'Google' : 'DeepL'})`));
+      console.log(chalk.bold(`🚀 Comment Translator (${backend === 'google' ? 'Google' : backend === 'libretranslate' ? 'LibreTranslate' : 'DeepL'})`));
       console.log(chalk.gray(`   Input:     ${input}`));
       console.log(chalk.gray(`   Backend:   ${useMock ? 'Mock' : backend}`));
       if (hasTerms) {
@@ -182,10 +192,20 @@ program.on('--help', () => {
   console.log('  $ export GOOGLE_APPLICATION_CREDENTIALS="./key.json"');
   console.log('  $ comment-translator ./src --backend google --target ja');
   console.log('');
+  console.log('  # Use LibreTranslate (FREE, self-hosted or public instance)');
+  console.log('  $ comment-translator ./src --backend libretranslate --target zh -o ./out');
+  console.log('  # LibreTranslate with custom server (self-hosted Docker)');
+  console.log('  $ comment-translator ./src --backend libretranslate --libre-url http://localhost:5000 --target zh');
+  console.log('  # LibreTranslate with API key (required by some public instances)');
+  console.log('  $ export LIBRETRANSLATE_API_KEY="your-api-key"');
+  console.log('  $ comment-translator ./src --backend libretranslate --target en');
+  console.log('');
   console.log('Environment variables:');
   console.log('  DEEPL_API_KEY              DeepL API key (:fx = Free, else Pro)');
   console.log('  GOOGLE_API_KEY             Google Cloud API key');
   console.log('  GOOGLE_APPLICATION_CREDENTIALS  Path to a Google service-account key.json');
+  console.log('  LIBRETRANSLATE_API_KEY     LibreTranslate API key (if required by the instance)');
+  console.log('  LIBRETRANSLATE_URL         LibreTranslate server URL (default: https://libretranslate.com)');
   console.log('  DEEPL_FREE                 Set "true" to force DeepL Free endpoint');
   console.log('');
   console.log('Glossary file (JSON):');
