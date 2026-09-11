@@ -8,6 +8,15 @@
  * re-indented comment reconstructed by parser.ts:rebuildComment() becomes
  * misaligned and the JSDoc structure is destroyed after translation
  * (this was the original v2.1.0 bug).
+ *
+ * v2.3.1 fixes:
+ *  - Multi-line tag descriptions no longer lose line structure after
+ *    translation (applyTranslations now preserves per-line layout).
+ *  - {@link}, {@code}, {@linkcode}, {@linkplain} inline tags are split out
+ *    as separate translation segments so the translator cannot mangle them.
+ *  - Leading / trailing whitespace left by the continuation-line parser is
+ *    trimmed, eliminating the spurious blank line after `@privilege`-style
+ *    tags whose description starts on the next line.
  */
 
 export interface JSDocTag {
@@ -25,6 +34,12 @@ export interface JSDocTag {
    * "`@remarks` + description" corruption.
    */
   multiline?: boolean;
+  /**
+   * When true, the description consists ONLY of inline tags (e.g. the line
+   * is just "{@link FooBar}"). Such descriptions must never be sent to the
+   * translator — they are structural references, not prose.
+   */
+  inlineOnly?: boolean;
 }
 
 export interface ParsedJSDoc {
@@ -39,14 +54,15 @@ export interface ParsedJSDoc {
 /**
  * Tags whose "description" text should be sent to the translator.
  * `remarks`, `summary`, `description`, `desc` are all included so that
- * Minecraft-style enum documentation (used in the bug report) survives
- * the translation round-trip.
+ * Minecraft-style enum documentation survives the translation round-trip.
  *
  * Also included: stage / visibility marker tags (`@beta`, `@alpha`,
  * `@experimental`, `@internal`, ...) — these are often followed by a
- * prose explanation (e.g. the reason an API is beta) that MUST be
- * translated; otherwise we get "partial translation" bugs where the
- * sentence right after `@beta` stays in English.
+ * prose explanation that MUST be translated.
+ *
+ * NOTE: `@privilege` is deliberately NOT included. Minecraft / Bedrock
+ * `@privilege` blocks document engine execution restrictions in English
+ * and should be left as-is.
  */
 export const TRANSLATABLE_TAGS: ReadonlySet<string> = new Set([
   'param', 'arg', 'argument', 'property', 'prop',
@@ -56,7 +72,6 @@ export const TRANSLATABLE_TAGS: ReadonlySet<string> = new Set([
   'example', 'examples',
   'deprecated', 'todo', 'fixme', 'note', 'warning',
   'see', 'author',
-  // Stage / visibility markers whose trailing text is human-readable prose.
   'beta', 'alpha', 'experimental', 'internal', 'public', 'private',
   'protected', 'readonly', 'since', 'version',
 ]);
@@ -88,7 +103,58 @@ const JSDOC_TAGS = [
   'todo', 'fixme', 'note', 'warning',
   'category', 'group', 'namespace',
   'memberof', 'module',
+  // Minecraft-specific (non-translatable, listed so parseJSDoc recognises
+  // them as structural tags rather than prose):
+  'privilege',
 ];
+
+/* ------------------------------------------------------------------ */
+/*  Inline-tag handling                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * JSDoc inline tags that must be preserved verbatim during translation.
+ * `{@link Target}`, `{@linkcode Target}`, `{@linkplain Target}`,
+ * `{@code someCode}` — the identifier / code inside must never be altered.
+ */
+const INLINE_TAG_RE = /\{@(link|linkcode|linkplain|code|inheritdoc)\s*[^}]*\}/g;
+
+/**
+ * Split a description into alternating [text, inline-tag] segments.
+ * Used by extractTranslatableParts so that inline tags are NOT sent to the
+ * translator (they come back as a single placeholder segment).
+ *
+ * Example input : "See {@link Foo} for details."
+ * Output segments: ["See ", "{@link Foo}", " for details."]
+ */
+export function splitInlineTags(text: string): string[] {
+  const segments: string[] = [];
+  let last = 0;
+  for (const m of text.matchAll(INLINE_TAG_RE)) {
+    if (m.index! > last) {
+      segments.push(text.slice(last, m.index!));
+    }
+    segments.push(m[0]); // the inline tag itself, preserved verbatim
+    last = m.index! + m[0].length;
+  }
+  if (last < text.length) {
+    segments.push(text.slice(last));
+  }
+  return segments;
+}
+
+/**
+ * True when the given description is entirely composed of inline tags
+ * (possibly with surrounding whitespace), i.e. there is no prose to translate.
+ */
+function isInlineOnly(description: string): boolean {
+  const stripped = description.replace(INLINE_TAG_RE, '').trim();
+  return stripped === '';
+}
+
+/* ------------------------------------------------------------------ */
+/*  Parsing                                                            */
+/* ------------------------------------------------------------------ */
 
 /**
  * Parse a JSDoc comment body into structured form.
@@ -100,7 +166,7 @@ export function parseJSDoc(text: string): ParsedJSDoc {
   const result: ParsedJSDoc = {
     descriptionLines: [],
     tags: [],
-    hasInlineTags: /\{@\w+/.test(text),
+    hasInlineTags: INLINE_TAG_RE.test(text),
   };
 
   if (!text.trim()) return result;
@@ -133,7 +199,7 @@ export function parseJSDoc(text: string): ParsedJSDoc {
     const trimmed = line.trim();
 
     if (trimmed.startsWith('@')) {
-      if (currentTag) result.tags.push(currentTag);
+      if (currentTag) result.tags.push(finalizeTag(currentTag));
 
       const match = trimmed.match(/^@(\w+)\s*(.*)$/s);
       if (match) {
@@ -168,10 +234,29 @@ export function parseJSDoc(text: string): ParsedJSDoc {
     }
   }
 
-  if (currentTag) result.tags.push(currentTag);
+  if (currentTag) result.tags.push(finalizeTag(currentTag));
 
   return result;
 }
+
+/**
+ * Finalise a tag after all its lines have been collected:
+ *  - trim leading / trailing whitespace (fixes the spurious blank line
+ *    caused by "@tag\\n<description>");
+ *  - mark inline-only descriptions so they are never sent for translation.
+ */
+function finalizeTag(tag: JSDocTag): JSDocTag {
+  const trimmed = tag.description.trim();
+  return {
+    ...tag,
+    description: trimmed,
+    inlineOnly: isInlineOnly(trimmed),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*  Serialization                                                      */
+/* ------------------------------------------------------------------ */
 
 /**
  * Serialize a ParsedJSDoc back into the comment BODY (no delimiters, no
@@ -227,12 +312,39 @@ export function serializeJSDoc(parsed: ParsedJSDoc): string {
   return out;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Translation parts extraction & application                         */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A translation "slot" descriptor. Each slot corresponds to one entry in the
+ * flat `string[]` returned by extractTranslatableParts. Slots come in two
+ * flavours:
+ *  - `{ kind: 'main' }`              → the top-level description
+ *  - `{ kind: 'tag', tagIndex }`     → a tag description (identified by its
+ *                                      index in `parsed.tags`, NOT by tag name,
+ *                                      so multi-line @param / @remarks blocks
+ *                                      cannot collide)
+ *
+ * Using the tag INDEX (rather than relying on filtered iteration order) is
+ * what guarantees alignment between extraction and apply, even when some tags
+ * are skipped as marker / inline-only.
+ */
+interface Slot {
+  kind: 'main' | 'tag';
+  tagIndex?: number;
+}
+
 /**
  * Extract translatable text segments from a ParsedJSDoc.
  * Returns an array of strings; order is: main description first (if any),
  * then each tag's description in declaration order. Segments are NOT joined
  * — keeping them separate is what allows applyTranslations() to map the
  * translated results back without misalignment.
+ *
+ * IMPORTANT: inline-tag-only descriptions (e.g. a line that is just
+ * "{@link FooBar}") are NOT emitted as translatable parts — they are
+ * structural and must be preserved verbatim.
  */
 export function extractTranslatableParts(parsed: ParsedJSDoc): string[] {
   const parts: string[] = [];
@@ -242,7 +354,8 @@ export function extractTranslatableParts(parsed: ParsedJSDoc): string[] {
 
   for (const tag of parsed.tags) {
     if (!isTranslatableTag(tag.tag)) continue;
-    const desc = tag.description.trim();
+    if (tag.inlineOnly) continue;          // never translate bare {@link} lines
+    const desc = tag.description;
     if (!desc) continue;
     // Guard: stage / visibility markers like `@since 1.2.0`, `@internal foo`,
     // `@readonly` often carry a version number or identifier rather than prose.
@@ -275,9 +388,13 @@ function isMarkerTag(tag: string): boolean {
  * Heuristic: a string is "prose" if it contains at least one whitespace,
  * i.e. is composed of multiple words. A version like "1.2.0" or an
  * identifier like "foo" is not prose and should not be sent to translation.
+ *
+ * Inline tags are NOT counted as prose content — `{@link Foo}` alone is not
+ * prose even though it contains spaces.
  */
 function looksLikeProse(text: string): boolean {
-  return /\s/.test(text);
+  const proseOnly = text.replace(INLINE_TAG_RE, ' ').trim();
+  return /\s/.test(proseOnly);
 }
 
 /**
@@ -285,6 +402,11 @@ function looksLikeProse(text: string): boolean {
  * `translatedParts` MUST be in the same order as extractTranslatableParts()
  * produced them. Order-based mapping is safe because we never re-join
  * multi-segment descriptions into one blob.
+ *
+ * KEY FIX (v2.3.1): tag descriptions now go through applyTextToDescription,
+ * which preserves the original multi-line layout. Previously a 4-line
+ * `@param` description would collapse to a single line after translation,
+ * losing the original formatting ("translation incomplete" bug).
  */
 export function applyTranslations(
   parsed: ParsedJSDoc,
@@ -297,6 +419,7 @@ export function applyTranslations(
     hasInlineTags: parsed.hasInlineTags,
   };
 
+  // --- main description -------------------------------------------------
   const main = result.descriptionLines.join('\n').trim();
   if (main) {
     result.descriptionLines = applyTextToDescription(
@@ -305,18 +428,32 @@ export function applyTranslations(
     );
   }
 
+  // --- tag descriptions ------------------------------------------------
+  // Iterate over ALL tags and consume a translation slot only for those
+  // that extractTranslatableParts() would have emitted. This two-pass
+  // agreement (same skip rules on both sides) is what keeps the index in
+  // `translatedParts` correct.
   for (let i = 0; i < result.tags.length; i++) {
     const tag = result.tags[i];
-    const desc = tag.description.trim();
-    if (!isTranslatableTag(tag.tag) || !desc) continue;
-    // Mirror the skip rule in extractTranslatableParts: short / structured
-    // marker payloads (versions, identifiers) are not sent for translation,
-    // so they must not consume a slot here either.
+    const desc = tag.description;
+
+    if (!isTranslatableTag(tag.tag)) continue;
+    if (tag.inlineOnly) continue;
+    if (!desc) continue;
     if (isMarkerTag(tag.tag) && !looksLikeProse(desc)) continue;
-    result.tags[i] = {
-      ...tag,
-      description: translatedParts[partIdx++] || tag.description,
-    };
+
+    const translated = translatedParts[partIdx++] || desc;
+
+    // PRESERVE LINE STRUCTURE: if the original description spanned multiple
+    // lines, distribute the (possibly re-flowed) translation across the same
+    // number of lines instead of collapsing everything onto one line.
+    if (tag.multiline && desc.split('\n').length > 1) {
+      const originalLines = desc.split('\n');
+      const reflowed = applyTextToDescription(originalLines, translated);
+      result.tags[i] = { ...tag, description: reflowed.join('\n') };
+    } else {
+      result.tags[i] = { ...tag, description: translated };
+    }
   }
 
   return result;
@@ -327,6 +464,10 @@ export function applyTranslations(
  * translated version while preserving the original line count and indentation
  * as closely as possible. Falls back to a single-line replacement when the
  * translated text has fewer lines than the original.
+ *
+ * This is the function that gives the "translation incomplete" fix: it
+ * ensures that a 4-line original description stays roughly 4 lines after
+ * translation, instead of being crushed into one gigantic line.
  */
 function applyTextToDescription(
   originalLines: string[],

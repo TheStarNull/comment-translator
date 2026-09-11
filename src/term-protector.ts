@@ -132,6 +132,14 @@ export class TermProtector {
       text = text.replace(/\bwww\.[^\s<]+\.[^\s<]+/gi, m => this.alloc(m));
     }
 
+    // 2b. JSDoc inline tags: {@link Target}, {@linkcode Target}, {@linkplain Target},
+    //     {@code snippet}, {@inheritdoc ...}.  The curly-brace + @ form is structural
+    //     JSDoc markup that must round-trip unchanged; a translator that sees "link"
+    //     or "code" may happily rewrite the whole thing.  Allocating one placeholder
+    //     per tag preserves it losslessly.  Must run before generic identifier / code
+    //     detection so we don't double-protect inner fragments.
+    text = text.replace(/\{@(link|linkcode|linkplain|code|inheritdoc)\s*[^}]*\}/g, m => this.alloc(m));
+
     // 3. Backtick code spans (must run before identifier detection).
     if (this.opts.protectCodeSpans) {
       text = text.replace(/`[^`]+`/g, m => this.alloc(m));

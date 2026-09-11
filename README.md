@@ -1,4 +1,4 @@
-# Comment Translator 🌐
+# Comment Translator 🌐 (v2.3.1)
 
 一个专门翻译 **JSDoc** 和代码注释的工具，支持 **JavaScript / TypeScript**（含 `.js`, `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`），通过 **DeepL** 或 **Google Translate API** 进行翻译，输出翻译后的文件。
 
@@ -16,6 +16,8 @@
 - 🧪 **Mock 模式** — 内置模拟翻译器，无需 API Key 即可测试
 - 🔑 **术语表 / 模型** — DeepL Glossary；Google `base` / `nmt` 模型
 - 🛡️ **术语保护 (v2.3)** — 自动保护代码标识符（`camelCase`/`PascalCase`/`snake_case`/`UPPER_CASE`）、URL、反引号代码块、占位符（`%s`/`${name}`），并支持自定义术语表，避免 API 误翻专有名词
+- 🛡️ **JSDoc 内联标签保护 (v2.3.1)** — `{@link}` / `{@code}` / `{@linkcode}` / `{@linkplain}` / `{@inheritdoc}` 现在自动占位保护，翻译后无损还原
+- 📐 **多行描述结构保留 (v2.3.1)** — `@remarks` / `@param` / `@throws` 等跨多行的描述翻译后保留原始行数和缩进，不再压缩成单行
 - ⚡ **自动重试** — 对限流（429）、配额（456）、5xx 错误自动退避重试
 
 ## 📦 安装
