@@ -15,6 +15,7 @@
 - 🎯 **格式保持** — 翻译后保持原始缩进、星号前缀等格式
 - 🧪 **Mock 模式** — 内置模拟翻译器，无需 API Key 即可测试
 - 🔑 **术语表 / 模型** — DeepL Glossary；Google `base` / `nmt` 模型
+- 🛡️ **术语保护 (v2.3)** — 自动保护代码标识符（`camelCase`/`PascalCase`/`snake_case`/`UPPER_CASE`）、URL、反引号代码块、占位符（`%s`/`${name}`），并支持自定义术语表，避免 API 误翻专有名词
 - ⚡ **自动重试** — 对限流（429）、配额（456）、5xx 错误自动退避重试
 
 ## 📦 安装
@@ -104,7 +105,65 @@ Options:
   -v, --verbose                  详细输出
   --progress                     显示进度条 (默认: 开, 除非 -v)
   --no-progress                  隐藏进度条
+  --glossary-file <path>        术语表 JSON 文件路径
+  --term <term...>              需保护的术语 (可重复, 如 --term DisplaySlotId --term scoreboard)
+  --no-protect-identifiers      关闭自动保护代码标识符
+  --no-protect-urls             不保护 URL
+  --no-protect-code-spans       不保护 \`backtick\` 代码块
 ```
+
+## 🛡️ 术语保护 (v2.3)
+
+翻译 API 经常会把 **API 名、变量名、URL** 一起翻译或改写（例如把 `WorldClockReloadTimeMarkerError` 拆成多个词），导致译文里的代码引用失效。v2.3 引入术语保护，在翻译前把这些片段替换成占位符，翻译后再还原原文——对 DeepL / Google 完全透明。
+
+### 保护对象
+
+| 类别 | 示例 | 说明 |
+|------|------|------|
+| 代码标识符（默认开） | `onCreate`、`WorldClock`、`scoreboard`、`MAX_RETRY` | camelCase / PascalCase / snake_case / UPPER_CASE |
+| URL（默认开） | `https://example.com` | 完整保留 |
+| 反引号代码（默认开） | `` `registerClock()` `` | 完整保留 |
+| 占位符（默认开） | `%s`、`${name}`、`{0}` | printf / 模板字符串 |
+| 自定义术语 | `DisplaySlotId`、`scoreboard` | 来自 `--term` 或术语表文件 |
+
+### 用法
+
+```bash
+# 1) 内联术语（快速）
+node dist/cli.js ./src --mock --term DisplaySlotId --term WorldClock
+
+# 2) 术语表文件（推荐，可维护、可入库）
+node dist/cli.js ./src --mock --glossary-file ./glossary.json
+
+# 3) 关闭自动标识符保护（仅保护术语表内容）
+node dist/cli.js ./src --mock --glossary-file ./glossary.json --no-protect-identifiers
+```
+
+### 术语表格式 (`glossary.json`)
+
+```json
+{
+  "terms": ["DisplaySlotId", "WorldClockReloadTimeMarkerError", "scoreboard"],
+  "identifiers": true,
+  "urls": true,
+  "codeSpans": true,
+  "placeholders": true
+}
+```
+
+- `terms`：要保护的术语数组；也可写成对象 `{ "term": "译文提示" }`（对象形式的译文提示为未来「语义润色」预留，当前仅 key 用于保护）。
+- `identifiers` / `urls` / `codeSpans` / `placeholders`：设为 `false` 可关闭对应自动保护。CLI 的 `--no-*` 优先级更高。
+- 文件缺失或非合法 JSON 仅打印警告，**不会中断运行**。
+
+### 效果示例
+
+```
+翻译前: Error thrown when registering a WorldClock with an invalid marker.
+翻译后: 注册 WorldClock 时使用无效 marker 时抛出的错误。
+        ↑ WorldClock 保持原文，其余正常翻译
+```
+
+运行结束后会在 Summary 中显示 `Terms protected: <count>`。详见 `src/term-protector.ts`。
 
 ## 📊 示例
 
@@ -158,7 +217,8 @@ comment-translator/
 │   ├── mock-translator.ts  # 模拟翻译器 (测试用)
 │   ├── parser.ts           # 注释提取与还原
 │   ├── jsdoc-parser.ts     # JSDoc 标签解析 (含 @beta/@remarks 修复)
-│   ├── engine.ts           # 核心翻译引擎 + 进度条
+│   ├── engine.ts           # 核心翻译引擎 + 进度条 + 术语保护接入
+│   ├── term-protector.ts    # 🛡️ 术语保护: 占位符替换/还原 + 术语表加载
 │   └── test-demo.ts        # 演示/测试入口
 ├── package.json
 ├── tsconfig.json

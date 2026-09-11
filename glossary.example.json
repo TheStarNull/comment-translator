@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/your-org/comment-translator/main/glossary.schema.json",
+  "comment": "项目术语表：列出的术语 / 标识符在翻译时保持原文。terms 为对象时，value 作为未来「语义润色」的目标译文提示（当前仅 key 用于保护）。",
+  "terms": [
+    "DisplaySlotId",
+    "WorldClockReloadTimeMarkerError",
+    "BelowName",
+    "scoreboard"
+  ],
+  "identifiers": true,
+  "urls": true,
+  "codeSpans": true,
+  "placeholders": true
+}

@@ -4,6 +4,7 @@ import chalk from 'chalk';
 import { ITranslator, DeepLTranslator } from './translator';
 import { extractComments, cleanCommentText, restoreComments, ExtractedComment } from './parser';
 import { parseJSDoc, extractTranslatableParts, applyTranslations, serializeJSDoc } from './jsdoc-parser';
+import { TermProtector, TermProtectorOptions } from './term-protector';
 
 export interface EngineConfig {
   /** Source directory or file */
@@ -25,6 +26,8 @@ export interface EngineConfig {
   verbose?: boolean;
   /** Show a progress bar (default: true when not verbose) */
   progress?: boolean;
+  /** Terminology protection options (see ./term-protector). */
+  terms?: TermProtectorOptions;
 }
 
 const DEFAULT_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.d.ts'];
@@ -70,12 +73,17 @@ class ProgressBar {
 /* ------------------------------------------------------------------ */
 
 export class TranslationEngine {
-  private config: Required<Omit<EngineConfig, 'output'>> & { output?: string };
+  private config: (Required<Omit<EngineConfig, 'output' | 'terms'>> & {
+    output?: string;
+    terms?: TermProtectorOptions;
+  });
+  private protector: TermProtector | null = null;
   private stats = {
     filesProcessed: 0,
     filesSkipped: 0,
     commentsTranslated: 0,
     errors: 0,
+    termsProtected: 0,
   };
 
   constructor(config: EngineConfig) {
@@ -88,6 +96,9 @@ export class TranslationEngine {
       progress: true,
       ...config,
     };
+
+    // Lazily created on first use; null when no protection is configured.
+    this.protector = this.config.terms ? new TermProtector(this.config.terms) : null;
   }
 
   /**
@@ -243,7 +254,19 @@ export class TranslationEngine {
         console.log(chalk.gray(`  Translating ${textsToTranslate.length} text segment(s)...`));
       }
 
-      const translations = await this.config.translator.translateBatch(textsToTranslate);
+      // Protect terms/identifiers/URLs before sending to the API, then restore
+      // the originals after translation. Backend-agnostic.
+      let textsForApi = textsToTranslate;
+      if (this.protector) {
+        textsForApi = this.protector.protectBatch(textsToTranslate);
+        this.stats.termsProtected += this.protector.protectedCount;
+      }
+
+      const translations = await this.config.translator.translateBatch(textsForApi);
+
+      const finalTranslations = this.protector
+        ? this.protector.restoreBatch(translations)
+        : translations;
 
       // Apply translations back to comments
       const translationMap = new Map<number, string>();
@@ -259,7 +282,7 @@ export class TranslationEngine {
           const parts = extractTranslatableParts(parsed);
 
           if (parts.length > 0) {
-            const translatedParts = translations.slice(transIdx, transIdx + parts.length);
+            const translatedParts = finalTranslations.slice(transIdx, transIdx + parts.length);
             transIdx += parts.length;
 
             const updated = applyTranslations(parsed, translatedParts);
@@ -269,7 +292,7 @@ export class TranslationEngine {
           }
         } else {
           // For block/line comments
-          const translated = translations[transIdx++] || cleaned;
+          const translated = finalTranslations[transIdx++] || cleaned;
           translationMap.set(comment.id, translated);
           this.stats.commentsTranslated++;
         }
@@ -345,6 +368,9 @@ export class TranslationEngine {
     console.log(`  Files processed:    ${chalk.green(this.stats.filesProcessed)}`);
     console.log(`  Files skipped:      ${chalk.gray(this.stats.filesSkipped)}`);
     console.log(`  Comments translated: ${chalk.green(this.stats.commentsTranslated)}`);
+    if (this.stats.termsProtected > 0) {
+      console.log(`  Terms protected:    ${chalk.cyan(this.stats.termsProtected)}`);
+    }
     if (this.stats.errors > 0) {
       console.log(`  Errors:             ${chalk.red(this.stats.errors)}`);
     }
