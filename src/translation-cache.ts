@@ -58,9 +58,16 @@ export class TranslationCache {
   }
 
   /**
+   * SHA-1 哈希（对外暴露，供 Polisher 等复用同一 key 规则）
+   */
+  static hash(text: string): string {
+    return crypto.createHash('sha1').update(text).digest('hex').slice(0, 12);
+  }
+
+  /**
    * 生成缓存 Key：hash + 语言对 + 引擎
    */
-  private static makeKey(text: string, sourceLang: string, targetLang: string, backend: string): string {
+  static makeKey(text: string, sourceLang: string, targetLang: string, backend: string): string {
     const hash = crypto.createHash('sha1').update(text).digest('hex').slice(0, 12);
     return `${backend}:${sourceLang}:${targetLang}:${hash}`;
   }

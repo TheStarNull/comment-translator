@@ -5,6 +5,7 @@ import { ITranslator, DeepLTranslator, createTranslator } from './translator';
 import { extractComments, cleanCommentText, restoreComments, ExtractedComment } from './parser';
 import { parseJSDoc, extractTranslatableParts, applyTranslations, serializeJSDoc } from './jsdoc-parser';
 import { TermProtector, TermProtectorOptions } from './term-protector';
+import { Polisher, PolisherOptions, PolishStyle } from './polisher';
 
 export interface EngineConfig {
   /** Source directory or file */
@@ -39,6 +40,8 @@ export interface EngineConfig {
   backend?: string;
   /** 目标语言（缓存键的一部分） */
   targetLang?: string;
+  /** 语义润色（提示词 LLM 重写 + 译后规则清理）。省略则关闭。 */
+  polish?: PolisherOptions;
 }
 
 const DEFAULT_EXTENSIONS = ['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.d.ts'];
@@ -84,14 +87,16 @@ class ProgressBar {
 /* ------------------------------------------------------------------ */
 
 export class TranslationEngine {
-  private config: (Omit<Required<Omit<EngineConfig, 'output' | 'terms' | 'cache' | 'backend'>>, 'targetLang'> & {
+  private config: (Omit<Required<Omit<EngineConfig, 'output' | 'terms' | 'cache' | 'backend' | 'polish'>>, 'targetLang'> & {
     output?: string;
     terms?: TermProtectorOptions;
     cache?: { cacheDir?: string; disabled?: boolean };
     backend?: string;
     targetLang?: string;
+    polish?: PolisherOptions;
   });
   private protector: TermProtector | null = null;
+  private polisher: Polisher | null = null;
   private translator: ITranslator;
   private stats = {
     filesProcessed: 0,
@@ -117,6 +122,10 @@ export class TranslationEngine {
 
     // Lazily created on first use; null when no protection is configured.
     this.protector = this.config.terms ? new TermProtector(this.config.terms) : null;
+
+    // Semantic polishing pass (disabled by default; opt in via config.polish).
+    // Lives after translation + term restoration, so it sees real identifiers.
+    this.polisher = config.polish?.enabled ? new Polisher(config.polish) : null;
 
     // The translator passed in is expected to ALREADY include the cache
     // decorator — createTranslator() in translator.ts wraps the raw backend
@@ -159,6 +168,11 @@ export class TranslationEngine {
     const t = this.translator as any;
     if (typeof t.flush === 'function') {
       t.flush();
+    }
+
+    // Flush polish-result cache so nothing is lost on normal exit.
+    if (this.polisher) {
+      this.polisher.flush();
     }
   }
 
@@ -300,6 +314,13 @@ export class TranslationEngine {
         ? this.protector.restoreBatch(translations)
         : translations;
 
+      // Semantic polishing pass (optional): takes the fully-restored
+      // translation (terms already resolved back to real identifiers) and
+      // runs LLM prompt-based rewrite + local rule cleanup.
+      const polishedTranslations = this.polisher
+        ? await this.polisher.polishBatch(finalTranslations)
+        : finalTranslations;
+
       // Apply translations back to comments
       const translationMap = new Map<number, string>();
       let transIdx = 0;
@@ -314,7 +335,7 @@ export class TranslationEngine {
           const parts = extractTranslatableParts(parsed);
 
           if (parts.length > 0) {
-            const translatedParts = finalTranslations.slice(transIdx, transIdx + parts.length);
+            const translatedParts = polishedTranslations.slice(transIdx, transIdx + parts.length);
             transIdx += parts.length;
 
             const updated = applyTranslations(parsed, translatedParts);
@@ -324,7 +345,7 @@ export class TranslationEngine {
           }
         } else {
           // For block/line comments
-          const translated = finalTranslations[transIdx++] || cleaned;
+          const translated = polishedTranslations[transIdx++] || cleaned;
           translationMap.set(comment.id, translated);
           this.stats.commentsTranslated++;
         }
@@ -405,6 +426,9 @@ export class TranslationEngine {
     }
     if (this.stats.errors > 0) {
       console.log(`  Errors:             ${chalk.red(this.stats.errors)}`);
+    }
+    if (this.polisher) {
+      console.log(`  Polish style:      ${chalk.magenta((this.config.polish?.style ?? 'tech-writing'))}`);
     }
     // Duck-type check: the translator may be a CachedTranslator (when caching
     // is enabled) or a plain backend. Both expose translate/translateBatch;

@@ -12,6 +12,7 @@ import {
 } from './translator';
 import { TranslationEngine } from './engine';
 import { MockTranslator } from './mock-translator';
+import { Polisher, PolishStyle } from './polisher';
 
 const program = new Command();
 
@@ -21,7 +22,7 @@ program
     'Translate JSDoc and code comments using DeepL / Google Translate API\n' +
       'Supports: .js, .ts, .jsx, .tsx, .mjs, .cjs'
   )
-  .version('2.4.0');
+  .version('2.5.0');
 
 const BACKEND_CHOICES = ['deepl', 'google', 'libretranslate'] as const;
 
@@ -59,6 +60,15 @@ program
   .option('--cache-dir <path>', 'Translation cache directory (default: .comment-translator-cache)', '.comment-translator-cache')
   .option('--no-cache', 'Disable translation cache (each run re-translates everything)')
   .option('--clear-cache', 'Clear the cache before running (starts fresh)')
+  // ---- Semantic polishing -------------------------------------------------
+  .option('--polish', 'Enable semantic polishing (LLM prompt + post-translation rule cleanup)')
+  .option('--polish-style <style>', 'Polish style: formal | tech-writing | concise | friendly (default: tech-writing)')
+  .option('--rules-only', 'Skip the LLM call; run only the local rule cleanup (zero extra API cost)')
+  .option('--no-polish-cache', 'Disable the polish-result cache (re-polish every run)')
+  .option('--llm-provider <name>', 'LLM provider for polishing: openai | ollama (default: openai)')
+  .option('--llm-base-url <url>', 'LLM base URL (OpenAI: https://api.openai.com/v1, Ollama: http://localhost:11434)')
+  .option('--llm-api-key <key>', 'LLM API key ($OPENAI_API_KEY / $OLLAMA_API_KEY)')
+  .option('--llm-model <name>', 'LLM model name (OpenAI: gpt-4o-mini, Ollama: qwen2.5)')
   .action(async (input: string, options: any) => {
     try {
       // Validate input
@@ -158,6 +168,24 @@ program
           ? { disabled: true }
           : { cacheDir: options.cacheDir || '.comment-translator-cache' },
         backend,
+        // Semantic polishing (optional, off by default). When --polish is set,
+        // runs after translation + term restoration: LLM rewrite + rules.
+        polish: options.polish
+          ? {
+              enabled: true,
+              style: (options.polishStyle as PolishStyle | undefined) ?? 'tech-writing',
+              llm: !options.rulesOnly,
+              rules: true,
+              fallbackOnError: true,
+              provider: options.llmProvider,
+              baseUrl: options.llmBaseUrl,
+              apiKey: options.llmApiKey,
+              model: options.llmModel,
+              targetLang,
+              cacheDir: options.cacheDir || '.comment-translator-cache',
+              noCache: options.polishCache === false,
+            }
+          : undefined,
       });
 
       // --clear-cache: wipe cache directory before running
@@ -181,6 +209,10 @@ program
       if (options.dryRun) console.log(chalk.yellow('   Mode:      DRY RUN (no files written)'));
       if (options.cache === false) console.log(chalk.gray('   Cache:     disabled (--no-cache)'));
       else console.log(chalk.gray(`   Cache:     ${options.cacheDir || '.comment-translator-cache'}`));
+      if (options.polish) {
+        console.log(chalk.magenta(`   Polish:    ${options.rulesOnly ? 'rules-only' : 'LLM + rules'} (style: ${options.polishStyle || 'tech-writing'})`));
+        console.log(chalk.gray(`              llm: ${options.llmProvider || 'openai'} / ${options.llmModel || '(default)'}`));
+      }
       console.log('');
 
       await engine.run();
@@ -250,6 +282,30 @@ program.on('--help', () => {
   console.log('  $ comment-translator ./src --no-cache --target zh');
   console.log('  # Start fresh (clear cache + translate everything)');
   console.log('  $ comment-translator ./src --clear-cache --target zh');
+  console.log('');
+  console.log('  # Semantic polishing — OpenAI-compatible (needs OPENAI_API_KEY)');
+  console.log('  $ comment-translator ./src --backend deepl --target zh --polish');
+  console.log('  $ comment-translator ./src --target zh --polish --polish-style concise');
+  console.log('  # Use DeepSeek / 兼容接口');
+  console.log('  $ comment-translator ./src --target zh --polish \\');
+  console.log('      --llm-provider openai --llm-base-url https://api.deepseek.com/v1 --llm-model deepseek-chat');
+  console.log('  # Local Ollama (fully offline, e.g. qwen2.5)');
+  console.log('  $ ollama pull qwen2.5 && ollama serve');
+  console.log('  $ comment-translator ./src --target zh --polish \\');
+  console.log('      --llm-provider ollama --llm-base-url http://localhost:11434 --llm-model qwen2.5');
+  console.log('  # Rules-only (no LLM call, zero extra cost)');
+  console.log('  $ comment-translator ./src --target zh --polish --rules-only');
+  console.log('');
+  console.log('Polish options:');
+  console.log('  --polish                  Enable semantic polishing');
+  console.log('  --polish-style <s>        formal | tech-writing | concise | friendly');
+  console.log('  --rules-only              Skip LLM, run local cleanup only');
+  console.log('  --llm-provider <p>        openai | ollama');
+  console.log('  --llm-base-url <url>      LLM endpoint base URL');
+  console.log('  --llm-api-key <key>       LLM API key');
+  console.log('  --llm-model <name>         Model (gpt-4o-mini / deepseek-chat / qwen2.5 ...)');
+  console.log('  --no-polish-cache          Re-polish every run');
+  console.log('');
   console.log('Glossary file (JSON):');
   console.log('  { "terms": ["DisplaySlotId", "scoreboard"], "identifiers": true }');
   console.log('  See src/term-protector.ts for the full schema.');

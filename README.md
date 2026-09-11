@@ -1,4 +1,4 @@
-# Comment Translator 🌐 (v2.4.1)
+# Comment Translator 🌐 (v2.5.0)
 
 一个专门翻译 **JSDoc** 和代码注释的工具，支持 **JavaScript / TypeScript**（含 `.js`, `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`, `.d.ts`），通过 **DeepL** / **Google Translate** / **LibreTranslate** 进行翻译，输出翻译后的文件。内置**翻译缓存（断点续跑）**，中断后重跑只翻剩余部分。
 
@@ -28,6 +28,7 @@
 
 ### 效率
 - 💾 **翻译缓存 / 断点续跑 (v2.4.0)** — 以 `SHA-1(原文 + 后端 + 语言对)` 为 key 持久化，中断后重跑只翻剩余部分，节省 API 配额
+- ✨ **语义润色 (v2.5.0)** — `--polish` 开启，在翻译 + 术语还原之后做「LLM 提示词重写 + 本地规则清理」，让译文读起来像人写的技术文档；支持 OpenAI / DeepSeek / Ollama 本地等多种 LLM
 - 🧪 **Mock 模式** — 内置模拟翻译器，无需 API Key 即可测试
 
 ---
@@ -143,6 +144,83 @@ node dist/cli.js ./src --clear-cache --target zh
 
 ---
 
+## ✨ 语义润色模式 (v2.5.0)
+
+机翻（DeepL / Google / LibreTranslate）追求"准确"，但常留下翻译腔：**重复标点、空格、`翻译:` 前缀、生硬语序**。语义润色在「翻译 → 术语还原」之后，对每段译文再做一次轻量改写，让它读起来像人写的技术文档。
+
+### 它做什么（两层）
+
+| 层 | 说明 | 成本 |
+|----|------|------|
+| **① LLM 提示词重写** | 把译文 + 原文上下文发给 LLM，要求「只输出润色后译文、保留标识符 / `{@link}` / 反引号代码块、保持行结构」 | 1 次 LLM 调用 / 段（命中缓存则不调用） |
+| **② 本地规则清理** | 去重复空格与空行、统一全半角标点（`。。`→`。`、`...`→`…`）、剥离「翻译:」前缀、逐行 trim | 纯本地，零成本 |
+
+② 始终生效；① 可通过 `--rules-only` 跳过。**LLM 报错时自动退回规则模式，绝不中断翻译**。
+
+### 风格预设 (`--polish-style`)
+
+- `tech-writing`（默认）— 主动语态、动词开头，参考 Microsoft / Google API 文档风格
+- `formal` — 正式书面语
+- `concise` — 极致精简，一条注释一个要点
+- `friendly` — 亲切易懂，面向初学者
+
+### 快速开始
+
+```bash
+# 1) OpenAI（默认，需 OPENAI_API_KEY）
+export OPENAI_API_KEY="sk-..."
+node dist/cli.js ./src --backend deepl --target zh --polish
+
+# 2) 指定风格
+node dist/cli.js ./src --target zh --polish --polish-style concise
+
+# 3) DeepSeek / 任意 OpenAI 兼容接口
+node dist/cli.js ./src --target zh --polish \
+  --llm-provider openai --llm-base-url https://api.deepseek.com/v1 --llm-model deepseek-chat
+
+# 4) 通义千问 / 月之暗面 / 自建网关 —— 同样走 --llm-base-url，换 URL + key 即可
+
+# 5) Ollama 本地（完全离线、免费）
+ollama pull qwen2.5 && ollama serve   # 默认 http://localhost:11434
+node dist/cli.js ./src --target zh --polish \
+  --llm-provider ollama --llm-base-url http://localhost:11434 --llm-model qwen2.5
+
+# 6) 仅规则清理（不调 LLM，零额外成本，适合 CI / 纯去噪）
+node dist/cli.js ./src --target zh --polish --rules-only
+```
+
+### CLI 参数
+
+| 参数 | 默认 | 说明 |
+|------|------|------|
+| `--polish` | off | 开启语义润色 |
+| `--polish-style` | `tech-writing` | `formal` / `tech-writing` / `concise` / `friendly` |
+| `--rules-only` | off | 跳过 LLM，仅本地规则清理 |
+| `--no-polish-cache` | off | 每次重跑都重新润色（关闭润色结果缓存） |
+| `--llm-provider` | `openai` | `openai`（兼容接口）/ `ollama` |
+| `--llm-base-url` | OpenAI: `https://api.openai.com/v1` / Ollama: `http://localhost:11434` | LLM 端点 |
+| `--llm-api-key` | `$OPENAI_API_KEY` | LLM API Key（Ollama 通常不需要） |
+| `--llm-model` | OpenAI: `gpt-4o-mini` / Ollama: `qwen2.5` | 模型名 |
+
+环境变量：`OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL`、`OLLAMA_BASE_URL`、`OLLAMA_MODEL`。
+
+### 润色结果也支持断点续跑
+
+润色结果以 `style + 目标语言 + 原文` 为 key 单独缓存（`polish-any-zh.jsonl` 等）。已润色过的段落重跑时直接读盘，**不再消耗 LLM 配额**——与翻译缓存共享 `--cache-dir`，用 `--no-polish-cache` 可单独关闭。
+
+### 效果示例
+
+```
+原文:    Sets the block in the dimension to the permuted state.
+机翻:    将尺寸中的块设置为置换的状态。
+                        ↑ 翻译腔："尺寸"应指 dimension，但整句生硬
+润色后: 将指定维度中的方块设置为置换后的状态。
+```
+
+> LLM 只会改写自然语言部分；`BlockPermutation`、`{@link XxxError}`、`` `register()` ``、`%s` 等受术语保护的对象逐字保留。
+
+---
+
 ## 📝 命令行参数
 
 ```
@@ -180,6 +258,16 @@ Options:
   --no-protect-identifiers      关闭自动保护代码标识符
   --no-protect-urls             不保护 URL
   --no-protect-code-spans       不保护 \`backtick\` 代码块
+
+  # --- 语义润色 (v2.5.0) ---
+  --polish                       开启语义润色（LLM 重写 + 本地规则清理）
+  --polish-style <style>         风格: formal|tech-writing|concise|friendly (默认: tech-writing)
+  --rules-only                   跳过 LLM，仅本地规则清理（零额外成本）
+  --no-polish-cache              禁用润色结果缓存（每次重跑重新润色）
+  --llm-provider <name>          LLM 提供者: openai|ollama (默认: openai)
+  --llm-base-url <url>           LLM 端点 (OpenAI: https://api.openai.com/v1, Ollama: http://localhost:11434)
+  --llm-api-key <key>            LLM API Key ($OPENAI_API_KEY)
+  --llm-model <name>             模型 (OpenAI: gpt-4o-mini, Ollama: qwen2.5)
 ```
 
 ---
@@ -324,6 +412,10 @@ comment-translator/
 │   ├── term-protector.ts             # 🛡️ 术语保护: 占位符替换/还原 + 术语表加载
 │   ├── translation-cache.ts          # 💾 缓存实现 (JSONL 持久化)
 │   ├── cached-translator.ts         # 💾 缓存装饰器 (包裹任意后端, 统一断点续跑)
+│   ├── llm-client.ts                # ✨ LLM 后端抽象 (OpenAI 兼容 / Ollama, v2.5.0)
+│   ├── polisher.ts                  # ✨ 语义润色: LLM 重写 + 本地规则清理 (v2.5.0)
+│   ├── polisher.test.ts             # ✨ 润色单元测试 (27 项)
+│   ├── smoke-polish.ts              # ✨ 润色端到端冒烟测试 (8 项)
 │   └── global.d.ts
 ├── dist/                             # 预编译产物 (可直接 node dist/cli.js 使用)
 ├── package.json
@@ -405,3 +497,17 @@ client.translateText(texts, sourceLang, targetLang, options);
 
 ### `{@link}` 被翻译了 / 注释"翻译不完全"
 正常情况下术语保护会拦截内联标签、多行结构保留会还原换行。若仍异常，用 `--dry-run -v` 查看还原前后对比，确认 `Terms protected` 计数 > 0。
+
+### `--polish` 后没看到效果
+- 若只用 `--rules-only`，效果主要是去噪（标点/空格/前缀），语义改写需走 LLM；
+- LLM 路径要**真正调用到**才生效：确认 `--llm-provider` / `--llm-base-url` / `--llm-api-key` 正确，且日志无 `network down` 类错误（出错会自动降级到 rules，不会报错）；
+- 加了 `--no-polish-cache` 后又重跑，旧结果不会复用，属正常。
+
+### Ollama 报连接失败
+`ollama serve` 默认监听 `11434`，先 `curl http://localhost:11434/api/tags` 验证；`--llm-model` 必须是已 `ollama pull` 过的模型名（如 `qwen2.5`）。
+
+### 润色消耗太多 LLM 配额
+- 首次全量会逐段调用 LLM；**重跑命中 `--cache-dir` 下的 `polish-*.jsonl` 后不再调用**；
+- 或对已完成的项目直接用 `--rules-only` 做低成本去噪。
+
+---
