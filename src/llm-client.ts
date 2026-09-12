@@ -9,8 +9,11 @@
  * machine translation, and expects a single polished string back.
  *
  * Designed to be dependency-light: uses Node's built-in `fetch` (available in
- * Node ≥ 18). Falls back to `node-fetch` only if needed.
+ * Node ≥ 18) under a hard deadline from ./fetch-timeout, so an unresponsive
+ * gateway cannot hang the polish pass.
  */
+
+import { fetchWithTimeout } from './fetch-timeout';
 
 export type LlmProvider = 'openai' | 'ollama';
 
@@ -127,20 +130,18 @@ export class LlmClient {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-
-    let res: Response;
-    try {
-      res = await fetch(url, {
+    // Shared deadline helper (see ./fetch-timeout), replacing the previous
+    // hand-rolled AbortController.
+    const res = await fetchWithTimeout(
+      url,
+      {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: controller.signal as any,
-      });
-    } finally {
-      clearTimeout(timer);
-    }
+      },
+      this.timeoutMs,
+      'LLM request'
+    );
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');

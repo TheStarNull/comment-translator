@@ -16,6 +16,8 @@
  * FR, ES, RU, PT-BR ... (see DeepL docs for the full list).
  */
 
+import { DEFAULT_TIMEOUT_MS } from './fetch-timeout';
+
 export type DeepLFormality = 'default' | 'prefer_less' | 'prefer_more' | 'less' | 'more';
 
 export interface DeepLTranslatorOptions {
@@ -39,6 +41,12 @@ export interface DeepLTranslatorOptions {
   maxBatch?: number;
   /** Max retry attempts on 429/456/5xx. Default 3. */
   maxRetries?: number;
+  /**
+   * Per-request connection timeout in ms, forwarded to deepl-node as
+   * `minTimeout`. Default 30000. The SDK's own default is 10s, which we
+   * override so all backends share one consistent deadline.
+   */
+  timeout?: number;
 }
 
 /**
@@ -56,7 +64,9 @@ export interface ITranslator {
  * Implements ITranslator (translate / translateBatch).
  */
 export class DeepLTranslator implements ITranslator {
-  private opts: Required<Pick<DeepLTranslatorOptions, 'maxBatch' | 'maxRetries' | 'targetLang'>> &
+  private opts: Required<
+    Pick<DeepLTranslatorOptions, 'maxBatch' | 'maxRetries' | 'targetLang' | 'timeout'>
+  > &
     DeepLTranslatorOptions;
   private client: any = null;
   private initialized = false;
@@ -75,6 +85,7 @@ export class DeepLTranslator implements ITranslator {
       targetLang: options.targetLang ?? 'ZH',
       maxBatch: options.maxBatch ?? 50,
       maxRetries: options.maxRetries ?? 3,
+      timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
       formality: options.formality,
       preserveFormatting: options.preserveFormatting ?? true,
       splitSentences: options.splitSentences ?? 'nonewlines',
@@ -122,7 +133,13 @@ export class DeepLTranslator implements ITranslator {
       serverUrl = 'https://api.deepl.com';
     }
 
-    this.client = new DeepLClientCtor(apiKey, { serverUrl });
+    // `minTimeout` is deepl-node's per-request connection timeout (the SDK
+    // defaults to 10s). We pass an explicit value so DeepL honours the same
+    // deadline as the fetch-based backends.
+    this.client = new DeepLClientCtor(apiKey, {
+      serverUrl,
+      minTimeout: this.opts.timeout,
+    });
     this.initialized = true;
   }
 
@@ -284,7 +301,15 @@ export interface CreateTranslatorOptions {
   libreTranslateUrl?: string;
   /** LibreTranslate only: API key for protected instances. */
   libreTranslateApiKey?: string;
-  /** LibreTranslate only: request timeout in ms (default 30000). */
+  /**
+   * Per-request network timeout in ms, applied to the selected backend
+   * (DeepL / Google / LibreTranslate). Default 30000.
+   */
+  timeout?: number;
+  /**
+   * LibreTranslate only: request timeout in ms.
+   * @deprecated Prefer the backend-agnostic `timeout`.
+   */
   libreTranslateTimeout?: number;
 
   /**
@@ -332,6 +357,7 @@ export function createTranslator(opts: CreateTranslatorOptions = {}): ITranslato
       targetLang: opts.targetLang,
       sourceLang: opts.sourceLang,
       model: opts.googleModel,
+      timeout: opts.timeout,
     });
   } else if (backend === 'libretranslate') {
     const { LibreTranslateTranslator } = require('./libretranslate-translator') as {
@@ -340,7 +366,9 @@ export function createTranslator(opts: CreateTranslatorOptions = {}): ITranslato
     raw = new LibreTranslateTranslator({
       baseUrl: opts.libreTranslateUrl ?? process.env.LIBRETRANSLATE_URL,
       apiKey: opts.libreTranslateApiKey ?? process.env.LIBRETRANSLATE_API_KEY,
-      timeout: opts.libreTranslateTimeout,
+      // Backend-agnostic `timeout` wins; the legacy LibreTranslate-specific
+      // option is still honoured for backward compatibility.
+      timeout: opts.timeout ?? opts.libreTranslateTimeout,
       targetLang: opts.targetLang,
       sourceLang: opts.sourceLang,
     });
@@ -353,6 +381,7 @@ export function createTranslator(opts: CreateTranslatorOptions = {}): ITranslato
       free: opts.free,
       formality: opts.formality,
       glossaryId: opts.glossaryId,
+      timeout: opts.timeout,
     });
   }
 

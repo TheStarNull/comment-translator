@@ -13,9 +13,13 @@
  *
  * Free tier: 500,000 characters/month. Pricing: $20 / 1M chars.
  * Docs: https://cloud.google.com/translate/docs/reference/rest/v2/translate
+ *
+ * Every request (including the OAuth token exchange for service-account auth)
+ * runs under a hard deadline — see ./fetch-timeout.
  */
 
 import { ITranslator } from './translator';
+import { DEFAULT_TIMEOUT_MS, fetchWithTimeout, isTimeoutError } from './fetch-timeout';
 
 export interface GoogleTranslatorOptions {
   /** API key, or falls back to process.env.GOOGLE_API_KEY. */
@@ -30,8 +34,15 @@ export interface GoogleTranslatorOptions {
   model?: 'base' | 'nmt';
   /** Max texts per batch request (Google v2 max is 128). Default 128. */
   maxBatch?: number;
-  /** Max retry attempts on 429 / 5xx. Default 3. */
+  /** Max retry attempts on 429 / 5xx / timeout. Default 3. */
   maxRetries?: number;
+  /** Per-request timeout in ms. Default 30000. */
+  timeout?: number;
+  /**
+   * Override the API endpoint. Mainly for tests / private proxies
+   * (e.g. a regional endpoint). Defaults to the public v2 translate URL.
+   */
+  endpoint?: string;
 }
 
 interface GoogleResponse {
@@ -46,11 +57,13 @@ interface GoogleResponse {
  */
 export class GoogleTranslator implements ITranslator {
   private opts: Required<
-    Pick<GoogleTranslatorOptions, 'maxBatch' | 'maxRetries' | 'targetLang' | 'model'>
+    Pick<GoogleTranslatorOptions, 'maxBatch' | 'maxRetries' | 'targetLang' | 'model' | 'timeout'>
   > &
     GoogleTranslatorOptions;
 
-  private endpoint = 'https://translation.googleapis.com/language/translate/v2';
+  private readonly defaultEndpoint =
+    'https://translation.googleapis.com/language/translate/v2';
+  private endpoint: string;
   private bearerToken: string | null = null;
   private tokenPromise: Promise<void> | null = null;
 
@@ -73,8 +86,11 @@ export class GoogleTranslator implements ITranslator {
       model: options.model ?? 'nmt',
       maxBatch: options.maxBatch ?? 128,
       maxRetries: options.maxRetries ?? 3,
+      timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
       sourceLang: options.sourceLang,
     };
+
+    this.endpoint = options.endpoint ?? this.defaultEndpoint;
   }
 
   /** Normalize "zh" / "zh-CN" / "ZH" -> Google's "zh-CN" style. */
@@ -125,8 +141,12 @@ export class GoogleTranslator implements ITranslator {
 
     // Use Google's JWT-less v1 token endpoint via a simple signed assertion.
     // We delegate signing to Node's built-in crypto; no extra deps required.
+    // The token exchange gets the same deadline as a translation request, so a
+    // stalled OAuth endpoint cannot hang the run either.
     const { googleAuthAssertion } = await import('./google-auth');
-    this.bearerToken = await googleAuthAssertion(keyJson.client_email!, keyJson.private_key!);
+    this.bearerToken = await googleAuthAssertion(keyJson.client_email!, keyJson.private_key!, {
+      timeoutMs: this.opts.timeout,
+    });
   }
 
   private buildUrl(): string {
@@ -138,11 +158,19 @@ export class GoogleTranslator implements ITranslator {
   }
 
   private async callApi(body: object): Promise<GoogleResponse> {
-    const res = await fetch(this.buildUrl(), {
-      method: 'POST',
-      headers: await this.authHeaders(),
-      body: JSON.stringify(body),
-    });
+    // Hard deadline: without one, a server that accepts the connection and then
+    // stalls would hang the process indefinitely (Node's fetch has no overall
+    // request timeout).
+    const res = await fetchWithTimeout(
+      this.buildUrl(),
+      {
+        method: 'POST',
+        headers: await this.authHeaders(),
+        body: JSON.stringify(body),
+      },
+      this.opts.timeout,
+      'Google Translate API'
+    );
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -197,8 +225,11 @@ export class GoogleTranslator implements ITranslator {
   }
 
   /**
-   * Retry on rate-limit (429) and 5xx errors. Other errors (e.g. 400 invalid
-   * target language) are thrown immediately.
+   * Retry on rate-limit (429), 5xx errors, and timeouts. Other errors (e.g. 400
+   * invalid target language) are thrown immediately.
+   *
+   * A timeout is exactly the "transient condition" retries exist for: the
+   * server may simply have been slow on that one attempt.
    */
   private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
     let lastErr: any;
@@ -208,7 +239,8 @@ export class GoogleTranslator implements ITranslator {
       } catch (e: any) {
         lastErr = e;
         const status = e?.status ?? e?.code;
-        if (![429, 500, 502, 503].includes(Number(status))) throw e;
+        const retryable = isTimeoutError(e) || [429, 500, 502, 503].includes(Number(status));
+        if (!retryable) throw e;
         const wait = Math.min(1000 * 2 ** attempt, 8000);
         await new Promise(r => setTimeout(r, wait));
       }

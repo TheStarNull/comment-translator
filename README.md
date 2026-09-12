@@ -243,6 +243,7 @@ Options:
   --google-credentials <path>    Google 服务账号 key.json 路径
   --libre-url <url>              LibreTranslate 服务地址 (默认: http://localhost:5000)
   --libre-key <key>              LibreTranslate API Key (公共实例可省略)
+  --timeout <ms>                 单次网络请求超时毫秒数 (默认: 30000)
   --cache-dir <dir>              缓存目录 (默认: .comment-translator-cache；缓存默认开启)
   --no-cache                     本次运行忽略已有缓存
   --clear-cache                  运行前清空缓存
@@ -423,6 +424,7 @@ comment-translator/
 │   ├── term-protector.ts             # 🛡️ 术语保护: 占位符替换/还原 + 术语表加载
 │   ├── translation-cache.ts          # 💾 缓存实现 (JSONL 持久化)
 │   ├── cached-translator.ts          # 💾 缓存装饰器 (包裹任意后端, 统一断点续跑)
+│   ├── fetch-timeout.ts               # ⏱️ 统一网络超时 (fetchWithTimeout + TimeoutError)
 │   ├── llm-client.ts                 # ✨ LLM 后端抽象 (OpenAI 兼容 / Ollama, v2.5.0)
 │   ├── polisher.ts                   # ✨ 语义润色: LLM 重写 + 本地规则清理 (v2.5.0)
 │   ├── polisher.test.ts              # ✨ 润色单元测试 (27 项)
@@ -433,6 +435,7 @@ comment-translator/
 │   ├── test-cache-resume.ts          # 缓存断点续跑集成测试 (npm run test:cache)
 │   ├── term-protector.test.ts        # 🛡️ 占位符往返回归测试 (npm run test:terms)
 │   ├── test-protection-default.ts    # 🛡️ 术语保护默认开启 E2E 测试 (npm run test:protection)
+│   ├── test-timeout.ts               # ⏱️ 网络超时回归测试 (npm run test:timeout)
 │   └── global.d.ts
 ├── dist/                             # 预编译产物 (可直接 node dist/cli.js 使用)
 ├── package.json

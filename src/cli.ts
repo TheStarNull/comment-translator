@@ -44,6 +44,7 @@ program
   .option('--google-credentials <path>', 'Google only: service-account key.json path')
   .option('--libre-url <url>', 'LibreTranslate only: base URL (e.g. "http://localhost:5000"). Defaults to $LIBRETRANSLATE_URL or http://localhost:5000')
   .option('--libre-key <key>', 'LibreTranslate only: API key for protected instances ($LIBRETRANSLATE_API_KEY)')
+  .option('--timeout <ms>', 'Per-request network timeout in ms for the translation backend (default: 30000)', '30000')
   .option('--mock', 'Use MockTranslator instead of real API (for testing)')
   .option('--extensions <exts>', 'Comma-separated file extensions', '.js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts')
   .option('--no-recursive', 'Disable recursive directory traversal')
@@ -80,6 +81,16 @@ program
 
       const targetLang = options.target;
       const backend = parseBackend(options.backend as string | undefined, 'deepl');
+
+      // Validate --timeout up-front: a bad value here would otherwise turn into
+      // an unbounded (or absurd) deadline deep inside a backend.
+      const timeout = Number(options.timeout);
+      if (!Number.isFinite(timeout) || timeout <= 0) {
+        console.error(
+          chalk.red(`✗ Invalid --timeout "${options.timeout}": expected a positive number of milliseconds.`)
+        );
+        process.exit(1);
+      }
 
       // Resolve which API key env var belongs to the selected backend.
       // LibreTranslate typically needs no key for self-hosted/local instances,
@@ -129,6 +140,8 @@ program
           // LibreTranslate-specific options
           libreTranslateUrl: options.libreUrl,
           libreTranslateApiKey: apiKey || undefined,
+          // Backend-agnostic network deadline (DeepL / Google / LibreTranslate).
+          timeout,
           // Cache (resume-after-interruption). When --no-cache is passed,
           // engine.config.cache is { disabled: true } and we skip it here too.
           cache: options.cache === false

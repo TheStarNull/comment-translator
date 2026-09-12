@@ -19,6 +19,7 @@
  */
 
 import { ITranslator } from './translator';
+import { DEFAULT_TIMEOUT_MS, fetchWithTimeout, isTimeoutError } from './fetch-timeout';
 
 export interface LibreTranslateOptions {
   /** Base URL of the LibreTranslate instance.
@@ -33,7 +34,7 @@ export interface LibreTranslateOptions {
   targetLang?: string;
   /** Max texts per batch request (LibreTranslate has no fixed limit, but we batch for efficiency). Default 50. */
   maxBatch?: number;
-  /** Max retry attempts on 429 / 5xx. Default 3. */
+  /** Max retry attempts on 429 / 5xx / timeout. Default 3. */
   maxRetries?: number;
   /** Request timeout in milliseconds. Default 30000. */
   timeout?: number;
@@ -68,7 +69,7 @@ export class LibreTranslateTranslator implements ITranslator {
       targetLang: options.targetLang ?? 'zh',
       maxBatch: options.maxBatch ?? 50,
       maxRetries: options.maxRetries ?? 3,
-      timeout: options.timeout ?? 30000,
+      timeout: options.timeout ?? DEFAULT_TIMEOUT_MS,
       sourceLang: options.sourceLang,
     };
   }
@@ -117,42 +118,39 @@ export class LibreTranslateTranslator implements ITranslator {
   /** Single translate call (handles both single string and array mode). */
   private async callTranslate(texts: string[], target: string): Promise<string[]> {
     const url = `${this.opts.baseUrl}/translate`;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.opts.timeout);
 
-    try {
-      const res = await fetch(url, {
+    // Shared deadline helper (see ./fetch-timeout). Replaces the previous
+    // hand-rolled AbortController so every backend behaves identically.
+    const res = await fetchWithTimeout(
+      url,
+      {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(this.buildBody(texts, target)),
-        signal: controller.signal as any,
-      });
+      },
+      this.opts.timeout,
+      'LibreTranslate API'
+    );
 
-      clearTimeout(timer);
-
-      if (!res.ok) {
-        const errText = await res.text().catch(() => '');
-        const err: any = new Error(
-          `LibreTranslate API ${res.status}: ${errText.slice(0, 500)}`
-        );
-        err.status = res.status;
-        throw err;
-      }
-
-      const data = (await res.json()) as LibreTranslateResponse | LibreTranslateResponse[];
-
-      // Response format depends on whether "q" was a string or array:
-      //   Single:  { translatedText: "..." }
-      //   Array:   [{ translatedText: "..." }, ...]
-      const results: LibreTranslateResponse[] = Array.isArray(data)
-        ? (data as LibreTranslateResponse[])
-        : [{ translatedText: (data as LibreTranslateResponse).translatedText ?? '' }];
-
-      return results.map(r => r.translatedText ?? '');
-    } catch (e) {
-      clearTimeout(timer);
-      throw e;
+    if (!res.ok) {
+      const errText = await res.text().catch(() => '');
+      const err: any = new Error(
+        `LibreTranslate API ${res.status}: ${errText.slice(0, 500)}`
+      );
+      err.status = res.status;
+      throw err;
     }
+
+    const data = (await res.json()) as LibreTranslateResponse | LibreTranslateResponse[];
+
+    // Response format depends on whether "q" was a string or array:
+    //   Single:  { translatedText: "..." }
+    //   Array:   [{ translatedText: "..." }, ...]
+    const results: LibreTranslateResponse[] = Array.isArray(data)
+      ? (data as LibreTranslateResponse[])
+      : [{ translatedText: (data as LibreTranslateResponse).translatedText ?? '' }];
+
+    return results.map(r => r.translatedText ?? '');
   }
 
   async translate(text: string, target?: string): Promise<string> {
@@ -184,7 +182,9 @@ export class LibreTranslateTranslator implements ITranslator {
   }
 
   /**
-   * Retry on rate-limit (429) and 5xx errors. Other errors are thrown immediately.
+   * Retry on rate-limit (429), 5xx errors, and timeouts. Other errors are
+   * thrown immediately. A self-hosted instance under load is exactly the case
+   * where one slow attempt should not abort the whole run.
    */
   private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
     let lastErr: any;
@@ -194,8 +194,9 @@ export class LibreTranslateTranslator implements ITranslator {
       } catch (e: any) {
         lastErr = e;
         const status = e?.status ?? e?.code;
-        // 429 = slow down, 5xx = server error
-        if (![429, 500, 502, 503].includes(Number(status))) throw e;
+        // 429 = slow down, 5xx = server error, timeout = transient
+        const retryable = isTimeoutError(e) || [429, 500, 502, 503].includes(Number(status));
+        if (!retryable) throw e;
         const wait = Math.min(1000 * 2 ** attempt, 8000);
         await new Promise(r => setTimeout(r, wait));
       }

@@ -4,9 +4,13 @@
  *
  * Returns an OAuth2 access token scoped for the Translate API.
  * Token is cached and reused until ~55 minutes; callers can re-invoke on 401.
+ *
+ * The token exchange runs under a hard deadline (see ./fetch-timeout): a
+ * stalled OAuth endpoint must not be able to hang the whole translation run.
  */
 
 import crypto from 'crypto';
+import { DEFAULT_TIMEOUT_MS, fetchWithTimeout } from './fetch-timeout';
 
 interface JWTHeader {
   alg: 'RS256';
@@ -25,6 +29,13 @@ interface JWTClaims {
 const SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 const AUD = 'https://oauth2.googleapis.com/token';
 
+export interface GoogleAuthOptions {
+  /** Deadline for the token exchange, in ms. Default 30000. */
+  timeoutMs?: number;
+  /** Override the token endpoint (tests / private proxies). Defaults to Google's. */
+  tokenUrl?: string;
+}
+
 function base64url(input: Buffer | string): string {
   const buf = typeof input === 'string' ? Buffer.from(input, 'utf-8') : input;
   return buf.toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
@@ -36,7 +47,8 @@ function base64url(input: Buffer | string): string {
  */
 export async function googleAuthAssertion(
   clientEmail: string,
-  privateKey: string
+  privateKey: string,
+  options: GoogleAuthOptions = {}
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
 
@@ -63,11 +75,16 @@ export async function googleAuthAssertion(
     assertion: jwt,
   });
 
-  const res = await fetch(AUD, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString(),
-  });
+  const res = await fetchWithTimeout(
+    options.tokenUrl ?? AUD,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params.toString(),
+    },
+    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    'Google OAuth token exchange'
+  );
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
