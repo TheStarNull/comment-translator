@@ -7,9 +7,11 @@
  * terminology (`DisplaySlotId`).
  *
  * Solution: before sending text to the translator we replace every protected
- * fragment with a unique placeholder (`\uE000` private-use codepoints); after
- * translation we put the *original* fragment back. Because the placeholder is
- * a single "letter" the API treats it as opaque and never translates it.
+ * fragment with a unique placeholder (a single `\uE000`-range private-use
+ * codepoint); after translation we put the *original* fragment back. Because
+ * the placeholder is a single "letter" the API treats it as opaque and never
+ * translates it, and because restoration is done per codepoint (not per run of
+ * codepoints) adjacent placeholders cannot be confused with one another.
  *
  * The protector is fully backend-agnostic: it sits between the engine and
  * `ITranslator.translateBatch`, so DeepL, Google, or any future backend all
@@ -157,10 +159,18 @@ export class TermProtector {
   /**
    * Restore placeholders in a (translated) text back to their originals.
    * Unknown placeholders are left untouched.
+   *
+   * NOTE: the character class deliberately has NO `+` quantifier — each
+   * private-use codepoint is resolved INDIVIDUALLY. Matching a whole run
+   * instead would break as soon as two placeholders become adjacent (with no
+   * separator between them), because the run would not correspond to any single
+   * map key. Per-codepoint resolution makes placeholders self-delimiting, so
+   * adjacency, repetition and whitespace churn introduced by the translator are
+   * all handled correctly.
    */
   restore(text: string): string {
     if (!text || this.map.size === 0) return text;
-    return text.replace(/[\uE000-\uF8FF]+/g, seq => {
+    return text.replace(/[\uE000-\uF8FF]/g, seq => {
       const original = this.map.get(seq);
       return original !== undefined ? original : seq;
     });
@@ -188,10 +198,14 @@ export class TermProtector {
       // Extremely unlikely, but keep the mapping stable instead of crashing.
       return original;
     }
-    // Two code-points so a single surrogate-ish slot is never ambiguous.
-    const seq =
-      String.fromCharCode(PLACEHOLDER_BASE + this.nextId) +
-      String.fromCharCode(PLACEHOLDER_BASE + this.nextId + 1);
+    // ONE code-point per placeholder. Restoration is per-codepoint (see
+    // restore()), so a placeholder is self-delimiting: two of them sitting next
+    // to each other ("%s%s", "{@link A}{@link B}") can never merge into an
+    // unresolvable run. The previous implementation emitted TWO consecutive
+    // codepoints whose ranges overlapped (id N used U+E000+N and U+E000+N+1),
+    // which — combined with the old greedy run-matching — silently dropped the
+    // term whenever fragments were adjacent.
+    const seq = String.fromCharCode(PLACEHOLDER_BASE + this.nextId);
     this.nextId++;
     this.seqByOriginal.set(original, seq);
     this.map.set(seq, original);
