@@ -1,4 +1,4 @@
-# Comment Translator 🌐 (v2.5.0)
+# Comment Translator 🌐 (v2.5.1)
 
 一个专门翻译 **JSDoc** 和代码注释的工具，支持 **JavaScript / TypeScript**（含 `.js`, `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`, `.d.ts`），通过 **DeepL** / **Google Translate** / **LibreTranslate** 进行翻译，输出翻译后的文件。内置**翻译缓存（断点续跑）**，中断后重跑只翻剩余部分。
 
@@ -42,6 +42,10 @@ npm run build    # 编译到 dist/（也可直接用包内预编译的 dist/）
 ```
 
 依赖：`chalk`、`commander`、`deepl-node`、`dotenv`。所有网络请求使用 Node 原生 `fetch`（无需 `node-fetch` / `form-data`），Google 服务账号鉴权使用 Node 内置 `crypto`（无需 `google-auth-library`）。**Node ≥ 18**。
+
+可选依赖：`typescript`（列于 `optionalDependencies`）。装上后 `.jsx` / `.tsx` 会走 TypeScript 官方 parser 做注释提取，能正确处理 **JSX 文本里的 `//`**（如 `https://`）、`{/* 注释 */}` 以及 `<T,>` 泛型箭头。**不装也不影响运行**——`.ts/.js/.mjs/.cjs` 始终使用零依赖词法器，结果完全一致；仅 JSX 文本的识别精度下降。
+
+> 注释提取对**正则字面量**与**模板字面量**是安全的：`const re = /[/*]/`、`const u = /https?:\/\//` 里的分隔符不会被误判为注释，`` `${ v /* 真注释 */ }` `` 里的注释也能被正确提取。
 
 ---
 
@@ -418,13 +422,15 @@ comment-translator/
 │   ├── google-auth.ts                # Google 服务账号 JWT 签名 (纯 Node crypto)
 │   ├── libretranslate-translator.ts  # 🌍 LibreTranslate 后端 (v2.4.0)
 │   ├── mock-translator.ts            # 模拟翻译器 (测试用)
-│   ├── parser.ts                     # 注释提取与还原
+│   ├── parser.ts                     # 注释提取与还原 (按文件类型分发)
+│   ├── lexer.ts                      # 🔍 零依赖词法器 (字符串/模板 ${}/正则 消歧)
+│   ├── ts-comments.ts                # 🔍 .jsx/.tsx 的 TS parser 提取 (token 间隙扫描)
 │   ├── jsdoc-parser.ts               # JSDoc 标签解析 (多行/内联标签保护)
 │   ├── engine.ts                     # 核心翻译引擎 + 进度条 + 术语保护接入
 │   ├── term-protector.ts             # 🛡️ 术语保护: 占位符替换/还原 + 术语表加载
 │   ├── translation-cache.ts          # 💾 缓存实现 (JSONL 持久化)
 │   ├── cached-translator.ts          # 💾 缓存装饰器 (包裹任意后端, 统一断点续跑)
-│   ├── fetch-timeout.ts               # ⏱️ 统一网络超时 (fetchWithTimeout + TimeoutError)
+│   ├── fetch-timeout.ts              # ⏱️ 统一网络超时 (fetchWithTimeout + TimeoutError)
 │   ├── llm-client.ts                 # ✨ LLM 后端抽象 (OpenAI 兼容 / Ollama, v2.5.0)
 │   ├── polisher.ts                   # ✨ 语义润色: LLM 重写 + 本地规则清理 (v2.5.0)
 │   ├── polisher.test.ts              # ✨ 润色单元测试 (27 项)
@@ -436,6 +442,7 @@ comment-translator/
 │   ├── term-protector.test.ts        # 🛡️ 占位符往返回归测试 (npm run test:terms)
 │   ├── test-protection-default.ts    # 🛡️ 术语保护默认开启 E2E 测试 (npm run test:protection)
 │   ├── test-timeout.ts               # ⏱️ 网络超时回归测试 (npm run test:timeout)
+│   ├── parser.test.ts                # 🔍 注释提取回归测试 (npm run test:parser)
 │   └── global.d.ts
 ├── dist/                             # 预编译产物 (可直接 node dist/cli.js 使用)
 ├── package.json

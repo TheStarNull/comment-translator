@@ -1,7 +1,22 @@
 # Changelog
 
-## [2.5.0] - 2026-09-11
+## [2.5.1] - 2026-09-13
 ### Fixed
+- **注释提取误判 / 漏判（regex 字面量、模板 `${}`、JSX）**：`parser.ts` 原来是一个手写状态机，只跳过了字符串字面量，**不识别正则字面量**，也把模板字面量整段跳过。因此它会**双向出错**——既凭空造出不存在的注释（并"翻译"它们、破坏代码），又吞掉真实注释：
+  - `const re = /[/*]/;` → 正则里的 `/*` 被当成块注释起始，其后整段代码被吞掉、注释永不翻译；
+  - `const u = /https?:\/\//;` → 正则里的 `//` 被当成行注释；
+  - `` const s = `${ v /* 真实注释 */ }`; `` → 模板 `${}` 内的**真实注释被漏掉**；
+  - `const el = <a>http://x</a>;` → JSX 文本里的 `//` 被当成注释（且 `{/* 注释 */}` 漏掉、`<T,>` 泛型被误判为 JSX）。
+
+  修复：按文件类型分发提取逻辑。
+  1. 新增 `src/lexer.ts`：**零依赖、带上下文的词法器**。通过「上一个有效 token 能否结束表达式」来正确区分**正则字面量 vs 除法**（标识符 / 字符串 / 数字 / `)` / `]` 之后是除法，其余位置是正则）；**递归进入模板 `${ ... }` 子代码**，因此其中的注释能被正常提取，嵌套模板也能正确处理（`${` 内含反引号）。未被续行的未闭合字符串、未闭合块注释均安全降级。
+  2. 新增 `src/ts-comments.ts`：`.jsx` / `.tsx` 交给 **TypeScript 官方 parser**。做法是遍历 AST 收集全部**叶子 token 跨度**，再把「token 之间未被覆盖的缝隙」当作 trivia 扫描注释——由于 JSX 文本、正则、`{/* */}` 都是 token，**天然不可能被误判为注释**；同时跳过 JSDoc 节点（它们描述注释本身）。
+  3. `parser.ts` 的 `extractComments` 改为按扩展名分发（`.jsx/.tsx` → TS parser，其余 → lexer），两种来源统一装配成原有的 `ExtractedComment` 结构，**对调用方零变更**。
+
+  已知限制：`typescript` 作为**可选依赖**（`optionalDependencies`）。未安装时 `.jsx/.tsx` 会回退到 lexer——此时 JSX 文本中的 `//`（如 `https://`）仍可能被误判。`.ts/.js/.mjs/.cjs` 无论是否安装均完全正确。
+
+  新增回归测试 `src/parser.test.ts`（66 项）：覆盖正则/除法消歧、模板 `${}` 与嵌套模板、字符串、JSX 文本与 `{/* */}`、`<T,>` 泛型、结构边界，以及返回结构（`text` / `original` / 行号 / id 连续性）与「无注释代码零误报」。修复前该套件 12 项失败。
+
 - **相邻占位符还原失效（术语静默丢失）**：`TermProtector` 在受保护片段**紧邻出现**时（无分隔符，如 `%s%s`、`{0}{1}`、`{@link A}{@link B}`、`` `a``b` ``）会把术语丢失，译文里残留不可见的 Unicode 私用区字符（U+E000–U+F8FF）。根因有二：
   1. `alloc()` 生成的占位符是**两个连续码点**且步长为 1，导致 token 的码点区间**互相重叠**（id N 占用 `U+E000+N` 与 `U+E000+N+1`），占位符并非自定界；
   2. `restore()` 用 `/[\uE000-\uF8FF]+/g` **贪婪合并**所有相邻私用区字符后整体查表，相邻的多个占位符会被并成一段、无法命中任何 key，于是被原样返回。
@@ -12,6 +27,10 @@
   修复：新增共享模块 `src/fetch-timeout.ts`（`fetchWithTimeout` + `TimeoutError` + `isTimeoutError`），为**所有**出网调用提供统一硬截止时间（默认 30s）。LibreTranslate 与 LLM 客户端的内联实现改为复用该模块（消除重复）。DeepL 通过 `minTimeout` 接入同一超时值。超时错误会**在重试逻辑中按瞬时故障处理**（Google / LibreTranslate 均如此），而调用方主动取消（外部 signal / Ctrl-C）**不**被当作超时、不触发重试。新增 CLI 选项 `--timeout <ms>`（对 DeepL / Google / LibreTranslate 统一生效；旧的 `libreTranslateTimeout` 仍兼容）。
   新增回归测试 `src/test-timeout.ts`（26 项）：起一个「接受连接后不回应」的本地 HTTP 服务，逐一验证 helper、Google 翻译、Google OAuth 交换、LibreTranslate、LLM 客户端均在约定时间内报超时而非挂起；并断言快响应不受影响、主动取消不被误判、超时会被重试。对照实验：同一 stall 服务下，裸 `fetch` 4 秒仍未返回（被强制杀掉），`fetchWithTimeout(300ms)` 约 335ms 即报 `timed out after 300ms`。
 
+### Changed
+- `typescript` 从纯 devDependency 改为同时列入 **`optionalDependencies`**，用于 `.jsx` / `.tsx` 的精确注释提取。不安装不会破坏任何功能（仅 JSX 文本识别精度下降），因此不会强迫仅处理 `.ts/.js` 的用户承担其体积。
+
+## [2.5.0] - 2026-09-11
 ### Added — 语义润色模式 (Semantic Polishing)
 - **`--polish` 开关**: 翻译 + 术语还原之后，对每段译文再做一次「语义润色」，让机翻读起来像人写的技术文档。默认关闭，加 `--polish` 即开启。
 - **双层实现** (`src/polisher.ts`)：

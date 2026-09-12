@@ -2,7 +2,18 @@
  * Comment Parser - extracts and restores comments from source code
  * Supports: JSDoc, single-line comments, multi-line comments
  * Works with: .js, .ts, .jsx, .tsx, .mjs, .cjs
+ *
+ * Extraction is dispatched by file type:
+ *   - .jsx / .tsx → ./ts-comments (the TypeScript parser, when installed), because
+ *     JSX text and generic arrows cannot be lexed reliably by hand.
+ *   - everything else → ./lexer, a small dependency-free context-aware lexer
+ *     that understands strings, template `${}` substitutions and regex literals.
+ *
+ * Both paths return comments in source order with identical shapes.
  */
+
+import { RawComment, scanComments } from './lexer';
+import { scanCommentsWithTypeScript } from './ts-comments';
 
 export interface ExtractedComment {
   /** Unique identifier for this comment within the file */
@@ -26,119 +37,72 @@ export interface ParseResult {
   source: string;
 }
 
+/** Files whose syntax (JSX) needs a real parser rather than a lexer. */
+const JSX_FILE = /\.(jsx|tsx)$/i;
+
 /**
- * Extract all comments from source code while preserving positions
+ * Locate raw comment ranges in `source`.
+ *
+ * JSX files are handed to the TypeScript parser when it is available; every
+ * other file (and JSX files without `typescript` installed) uses the built-in
+ * lexer.
  */
-export function extractComments(source: string, _filename: string): ParseResult {
+export function extractRawComments(source: string, filename: string): RawComment[] {
+  if (JSX_FILE.test(filename)) {
+    const viaParser = scanCommentsWithTypeScript(source, filename);
+    if (viaParser) return viaParser;
+  }
+  return scanComments(source);
+}
+
+/**
+ * Extract all comments from source code while preserving positions.
+ *
+ * Both backends produce plain ranges; the `ExtractedComment` shape (ids,
+ * delimiters-stripped text, 1-based line numbers) is assembled here so callers
+ * see identical results either way.
+ */
+export function extractComments(source: string, filename: string): ParseResult {
+  const raw = extractRawComments(source, filename);
   const comments: ExtractedComment[] = [];
+
   let id = 0;
+  let line = 1;
+  let pos = 0;
 
-  // State machine approach
-  let i = 0;
-  const n = source.length;
-  let lineNum = 1;
+  for (const rc of raw) {
+    // An unterminated block comment means the source is malformed; leave it
+    // untouched rather than trying to rewrite it.
+    if (rc.kind === 'block' && rc.unterminated) continue;
 
-  while (i < n) {
-    const ch = source[i];
-    const next = source[i + 1];
-
-    // Track line numbers
-    if (ch === '\n') {
-      lineNum++;
+    // Advance the line counter up to the comment's first character.
+    while (pos < rc.start) {
+      if (source[pos] === '\n') line++;
+      pos++;
+    }
+    const startLine = line;
+    // …and through the comment itself, so the next one is counted correctly.
+    while (pos < rc.end) {
+      if (source[pos] === '\n') line++;
+      pos++;
     }
 
-    // Check for comment start
-    if (ch === '/' && next === '*') {
-      // Block comment or JSDoc
-      const start = i;
-      const startLine = lineNum;
-      const isJSDoc = source[i + 2] === '*';
+    const original = source.slice(rc.start, rc.end);
+    const isJSDoc = rc.kind === 'block' && source[rc.start + 2] === '*';
+    const text =
+      rc.kind === 'line'
+        ? original.slice(2)
+        : original.replace(/^\/\*\*?/, '').replace(/\*\/$/, '');
 
-      // Find the end of the comment
-      i += 2;
-      let commentContent = '';
-      let foundEnd = false;
-
-      while (i < n) {
-        if (source[i] === '*' && source[i + 1] === '/') {
-          i += 2;
-          foundEnd = true;
-          break;
-        }
-        if (source[i] === '\n') {
-          lineNum++;
-        }
-        commentContent += source[i];
-        i++;
-      }
-
-      if (foundEnd) {
-        const end = i;
-        const fullComment = source.slice(start, end);
-        const innerContent = fullComment.replace(/^\/\*\*?/, '').replace(/\*\/$/, '');
-
-        comments.push({
-          id: id++,
-          text: innerContent,
-          original: fullComment,
-          type: isJSDoc ? 'jsdoc' : 'block',
-          start,
-          end,
-          line: startLine,
-        });
-      }
-      continue;
-    }
-
-    if (ch === '/' && next === '/') {
-      // Single line comment
-      const start = i;
-      const startLine = lineNum;
-      let commentText = '';
-      i += 2;
-
-      while (i < n && source[i] !== '\n') {
-        commentText += source[i];
-        i++;
-      }
-
-      const end = i;
-      const fullComment = source.slice(start, end);
-
-      comments.push({
-        id: id++,
-        text: commentText,
-        original: fullComment,
-        type: 'line',
-        start,
-        end,
-        line: startLine,
-      });
-      continue;
-    }
-
-    // Skip string literals to avoid false positives
-    if (ch === '"' || ch === "'" || ch === '`') {
-      const quote = ch;
-      i++;
-      while (i < n) {
-        if (source[i] === '\\') {
-          i += 2;
-          continue;
-        }
-        if (source[i] === quote) {
-          i++;
-          break;
-        }
-        if (source[i] === '\n') {
-          lineNum++;
-        }
-        i++;
-      }
-      continue;
-    }
-
-    i++;
+    comments.push({
+      id: id++,
+      text,
+      original,
+      type: rc.kind === 'line' ? 'line' : isJSDoc ? 'jsdoc' : 'block',
+      start: rc.start,
+      end: rc.end,
+      line: startLine,
+    });
   }
 
   return { comments, source };
