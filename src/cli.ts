@@ -11,6 +11,7 @@ import {
 import { TranslationEngine } from './engine';
 import { MockTranslator } from './mock-translator';
 import { PolishStyle } from './polisher';
+import { TermProtectorOptions } from './term-protector';
 
 const program = new Command();
 
@@ -55,6 +56,8 @@ program
   .option('--no-protect-identifiers', 'Disable auto-protection of code identifiers (camelCase/PascalCase/snake_case)')
   .option('--no-protect-urls', 'Do not protect URLs in comments')
   .option('--no-protect-code-spans', 'Do not protect `backtick` code spans')
+  .option('--no-protect-placeholders', 'Do not protect printf-style placeholders (%s, %d, {0}, ${name})')
+  .option('--no-protection', 'Disable terminology protection entirely (identifiers/URLs/code spans are translated literally)')
   .option('--cache-dir <path>', 'Translation cache directory (default: .comment-translator-cache)', '.comment-translator-cache')
   .option('--no-cache', 'Disable translation cache (each run re-translates everything)')
   .option('--clear-cache', 'Clear the cache before running (starts fresh)')
@@ -142,15 +145,20 @@ program
         .map((e: string) => e.trim())
         .map((e: string) => (e.startsWith('.') ? e : `.${e}`));
 
-      // Build terminology-protection config (only created when actually used,
-      // so projects without a glossary pay zero overhead).
-      const termsOpts: Record<string, any> = {};
-      let hasTerms = false;
-      if (options.glossaryFile) { termsOpts.glossaryFile = options.glossaryFile; hasTerms = true; }
-      if (options.term && options.term.length) { termsOpts.terms = options.term; hasTerms = true; }
+      // Build terminology-protection config. Protection is ON BY DEFAULT:
+      // TermProtector already defaults every category to true, so we always
+      // hand the engine an options object (an empty object is enough to make
+      // the engine create the protector). Passing `undefined` would silently
+      // disable protection entirely — which is how the `--no-protect-*` flags
+      // used to become no-ops. `--no-protection` is the explicit kill switch.
+      const protectionEnabled = options.protection !== false;
+      const termsOpts: TermProtectorOptions = {};
+      if (options.glossaryFile) termsOpts.glossaryFile = options.glossaryFile;
+      if (options.term && options.term.length) termsOpts.terms = options.term;
       if (options.protectIdentifiers === false) termsOpts.protectIdentifiers = false;
       if (options.protectUrls === false) termsOpts.protectUrls = false;
       if (options.protectCodeSpans === false) termsOpts.protectCodeSpans = false;
+      if (options.protectPlaceholders === false) termsOpts.protectPlaceholders = false;
 
       // Create and run engine
       const engine = new TranslationEngine({
@@ -163,7 +171,7 @@ program
         verbose: options.verbose || false,
         // Default to showing the bar; --verbose implies structured logs instead.
         progress: options.progress !== false && !options.verbose,
-        terms: hasTerms ? termsOpts : undefined,
+        terms: protectionEnabled ? termsOpts : undefined,
         cache: options.cache === false
           ? { disabled: true }
           : { cacheDir: options.cacheDir || '.comment-translator-cache' },
@@ -200,8 +208,22 @@ program
       console.log(chalk.bold(`🚀 Comment Translator (${backend === 'google' ? 'Google' : backend === 'libretranslate' ? 'LibreTranslate' : 'DeepL'})`));
       console.log(chalk.gray(`   Input:     ${input}`));
       console.log(chalk.gray(`   Backend:   ${useMock ? 'Mock' : backend}`));
-      if (hasTerms) {
+      if (options.glossaryFile || (options.term && options.term.length)) {
         console.log(chalk.gray(`   Glossary:  ${options.glossaryFile || '(inline terms)'}`));
+      }
+      if (!protectionEnabled) {
+        console.log(chalk.gray('   Protect:   disabled (--no-protection)'));
+      } else {
+        const off: string[] = [];
+        if (options.protectIdentifiers === false) off.push('identifiers');
+        if (options.protectUrls === false) off.push('urls');
+        if (options.protectCodeSpans === false) off.push('code-spans');
+        if (options.protectPlaceholders === false) off.push('placeholders');
+        console.log(
+          chalk.gray(
+            `   Protect:   ${off.length ? 'on, except ' + off.join(', ') : 'identifiers, urls, code-spans, placeholders'}`
+          )
+        );
       }
       console.log(chalk.gray(`   Target:    ${targetLang}`));
       if (options.source) console.log(chalk.gray(`   Source:    ${options.source}`));
@@ -305,6 +327,17 @@ program.on('--help', () => {
   console.log('  --llm-api-key <key>       LLM API key');
   console.log('  --llm-model <name>         Model (gpt-4o-mini / deepseek-chat / qwen2.5 ...)');
   console.log('  --no-polish-cache          Re-polish every run');
+  console.log('');
+  console.log('Terminology protection (ON by default):');
+  console.log('  --glossary-file <path>     JSON file with extra terms to protect');
+  console.log('  --term <t...>              Extra term(s) to protect (repeatable)');
+  console.log('  --no-protect-identifiers   Do not protect camelCase/PascalCase/snake_case identifiers');
+  console.log('  --no-protect-urls          Do not protect URLs');
+  console.log('  --no-protect-code-spans    Do not protect `backtick` code spans');
+  console.log('  --no-protect-placeholders  Do not protect %s / {0} / ${name}');
+  console.log('  --no-protection            Disable protection entirely');
+  console.log('  $ comment-translator ./src --mock --target zh            # protects by default');
+  console.log('  $ comment-translator ./src --mock --target zh --no-protect-urls');
   console.log('');
   console.log('Glossary file (JSON):');
   console.log('  { "terms": ["DisplaySlotId", "scoreboard"], "identifiers": true }');

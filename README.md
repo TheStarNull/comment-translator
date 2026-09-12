@@ -258,6 +258,8 @@ Options:
   --no-protect-identifiers      关闭自动保护代码标识符
   --no-protect-urls             不保护 URL
   --no-protect-code-spans       不保护 \`backtick\` 代码块
+  --no-protect-placeholders     不保护 %s / %d / {0} / ${name} 占位符
+  --no-protection               完全关闭术语保护（标识符/URL/代码块按字面翻译）
 
   # --- 语义润色 (v2.5.0) ---
   --polish                       开启语义润色（LLM 重写 + 本地规则清理）
@@ -275,6 +277,10 @@ Options:
 ## 🛡️ 术语保护 (v2.3)
 
 翻译 API 经常会把 **API 名、变量名、URL** 一起翻译或改写（例如把 `WorldClockReloadTimeMarkerError` 拆成多个词），导致译文里的代码引用失效。v2.3 引入术语保护，在翻译前把这些片段替换成占位符，翻译后再还原原文——对 DeepL / Google / LibreTranslate 完全透明。
+
+> **术语保护默认开启**，无需任何参数——下表中「默认开」的类别开箱即用。
+> 需要按类别关闭用 `--no-protect-*`；想彻底关掉（按字面翻译标识符）用 `--no-protection`。
+> 运行结束的 Summary 中会显示 `Terms protected: <count>`，为 0 或缺失即表示未生效。
 
 ### 保护对象
 
@@ -298,6 +304,12 @@ node dist/cli.js ./src --mock --glossary-file ./glossary.json
 
 # 3) 关闭自动标识符保护（仅保护术语表内容）
 node dist/cli.js ./src --mock --glossary-file ./glossary.json --no-protect-identifiers
+
+# 4) 默认即保护（无需任何参数）——Summary 会出现 "Terms protected: N"
+node dist/cli.js ./src --mock --target zh
+
+# 5) 完全关闭术语保护（按字面翻译，不插入占位符）
+node dist/cli.js ./src --mock --target zh --no-protection
 ```
 
 ### 术语表格式 (`glossary.json`)
@@ -419,6 +431,8 @@ comment-translator/
 │   ├── test-cache.ts                 # 缓存单元测试
 │   ├── test-cache-e2e.ts             # 缓存端到端 (中断续跑) 测试
 │   ├── test-cache-resume.ts          # 缓存断点续跑集成测试 (npm run test:cache)
+│   ├── term-protector.test.ts        # 🛡️ 占位符往返回归测试 (npm run test:terms)
+│   ├── test-protection-default.ts    # 🛡️ 术语保护默认开启 E2E 测试 (npm run test:protection)
 │   └── global.d.ts
 ├── dist/                             # 预编译产物 (可直接 node dist/cli.js 使用)
 ├── package.json
