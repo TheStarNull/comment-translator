@@ -178,13 +178,13 @@ export class GoogleTranslator implements ITranslator {
     return out;
   }
 
-  async translate(text: string, target?: string): Promise<string> {
+  async translate(text: string, _target?: string): Promise<string> {
     if (!text.trim()) return text;
     const result = await this.translateMany([text]);
     return result[0] ?? text;
   }
 
-  async translateBatch(texts: string[], target?: string): Promise<string[]> {
+  async translateBatch(texts: string[], _target?: string): Promise<string[]> {
     const validTexts = texts.filter(t => t.trim());
     if (validTexts.length === 0) return texts;
 

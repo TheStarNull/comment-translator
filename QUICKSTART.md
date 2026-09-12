@@ -28,7 +28,7 @@ node dist/cli.js ./src --backend libretranslate --target en
 
 | CLI 参数 | 环境变量 | 默认值 | 说明 |
 |----------|---------|--------|------|
-| `--libre-url` | `LIBRETRANSLATE_URL` | `https://libretranslate.com` | 服务地址 |
+| `--libre-url` | `LIBRETRANSLATE_URL` | `http://localhost:5000` | 服务地址 |
 | `--libre-key` | `LIBRETRANSLATE_API_KEY` | (无) | API Key（部分实例需要） |
 | `-t, --target` | - | `zh` | 目标语言（小写代码：zh/en/ja/ko/de/fr/es/ru） |
 | `-s, --source` | - | auto-detect | 源语言 |

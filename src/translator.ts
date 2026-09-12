@@ -53,8 +53,7 @@ export interface ITranslator {
 
 /**
  * DeepL translator (uses deepl-node, dynamically imported).
- * Implements ITranslator. Compatible with GoogleTranslator's old shape
- * (translateText / translateBatch) via aliases.
+ * Implements ITranslator (translate / translateBatch).
  */
 export class DeepLTranslator implements ITranslator {
   private opts: Required<Pick<DeepLTranslatorOptions, 'maxBatch' | 'maxRetries' | 'targetLang'>> &
@@ -218,11 +217,6 @@ export class DeepLTranslator implements ITranslator {
     return texts.map(t => (t.trim() ? (outMap.get(t) ?? t) : t));
   }
 
-  /** Alias kept for backward compatibility with old Google-based code. */
-  translateText(text: string): Promise<string> {
-    return this.translate(text);
-  }
-
   /**
    * Retry on rate-limit (429), quota exceeded (456), and 5xx errors.
    * Other errors (e.g. 401 invalid key) are thrown immediately.
@@ -312,6 +306,8 @@ export interface CreateTranslatorOptions {
     /** When true, drop the entire cache before translating (start fresh). */
     clear?: boolean;
   };
+  /** Log cache hit/miss details while translating (passed to CachedTranslator). */
+  verbose?: boolean;
 }
 
 /**
@@ -376,6 +372,7 @@ export function createTranslator(opts: CreateTranslatorOptions = {}): ITranslato
           backend: string;
           sourceLang: string;
           targetLang: string;
+          verbose?: boolean;
         }
       ) => ITranslator;
     };
@@ -405,6 +402,7 @@ export function createTranslator(opts: CreateTranslatorOptions = {}): ITranslato
       backend,
       sourceLang: opts.sourceLang || 'auto',
       targetLang: (opts.targetLang ?? 'ZH').toLowerCase(),
+      verbose: opts.verbose ?? false,
     });
   }
 

@@ -3,16 +3,14 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import * as fs from 'fs';
 import {
-  DeepLTranslator,
   ITranslator,
   DeepLFormality,
   createTranslator,
   parseBackend,
-  BackendName,
 } from './translator';
 import { TranslationEngine } from './engine';
 import { MockTranslator } from './mock-translator';
-import { Polisher, PolishStyle } from './polisher';
+import { PolishStyle } from './polisher';
 
 const program = new Command();
 
@@ -133,6 +131,8 @@ program
           cache: options.cache === false
             ? { disabled: true }
             : { cacheDir: options.cacheDir || '.comment-translator-cache', clear: !!options.clearCache },
+          // Surface cache hit/miss logs only in verbose mode (--verbose).
+          verbose: options.verbose || false,
         });
       }
 

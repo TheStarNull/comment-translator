@@ -12,7 +12,7 @@ import chalk from 'chalk';
 import { TranslationEngine } from './engine';
 import { MockTranslator } from './mock-translator';
 import { extractComments, cleanCommentText } from './parser';
-import { parseJSDoc, extractTranslatableParts, applyTranslations, serializeJSDoc } from './jsdoc-parser';
+import { parseJSDoc, extractTranslatableParts } from './jsdoc-parser';
 
 // Sample test file content
 const sampleCode = `

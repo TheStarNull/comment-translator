@@ -7,7 +7,6 @@
 import { Polisher } from './polisher';
 import * as P from './polisher';
 import { LlmClient } from './llm-client';
-import * as assert from 'assert';
 
 let passed = 0;
 let failed = 0;

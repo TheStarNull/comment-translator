@@ -17,7 +17,7 @@ const ok = (n: string, c: any) => { if (c) passed++; else { failed++; console.lo
 
 class FakeTranslator implements ITranslator {
   calls = 0;
-  constructor(private suffix: string) {}
+  constructor(_suffix: string) {}
   async translate(text: string): Promise<string> {
     this.calls++;
     // Simulate a "machine" translation with obvious roughness:

@@ -29,16 +29,14 @@ export interface ParseResult {
 /**
  * Extract all comments from source code while preserving positions
  */
-export function extractComments(source: string, filename: string): ParseResult {
+export function extractComments(source: string, _filename: string): ParseResult {
   const comments: ExtractedComment[] = [];
-  const lines = source.split('\n');
   let id = 0;
 
   // State machine approach
   let i = 0;
   const n = source.length;
   let lineNum = 1;
-  let lastLineStart = 0;
 
   while (i < n) {
     const ch = source[i];
@@ -47,7 +45,6 @@ export function extractComments(source: string, filename: string): ParseResult {
     // Track line numbers
     if (ch === '\n') {
       lineNum++;
-      lastLineStart = i + 1;
     }
 
     // Check for comment start

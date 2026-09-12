@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment / secrets
+.env
+.env.local
+google-key.json
+
+# Translation & polish caches (resume-after-interruption)
+.comment-translator-cache/
+.comment-translator-cache-test/
+.comment-translator-cache-e2e/
+.test-cache-resume/
+.e2e-test/
+
+# Test demo artefacts
+test-fixtures/
+test-output/
+test-output-*/
+
+# Logs & OS junk
+*.log
+.DS_Store

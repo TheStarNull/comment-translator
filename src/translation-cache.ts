@@ -33,6 +33,7 @@ export class TranslationCache {
   private readonly backend: string;
   private readonly targetLang: string;
   private readonly sourceLang: string;
+  private readonly verbose: boolean;
   private writeBuffer: string[] = [];
   private flushScheduled = false;
 
@@ -41,10 +42,13 @@ export class TranslationCache {
     backend: string;
     sourceLang: string;
     targetLang: string;
+    /** When true, log how many entries were loaded from disk. Default false. */
+    verbose?: boolean;
   }) {
     this.backend = options.backend;
     this.sourceLang = options.sourceLang || 'auto';
     this.targetLang = options.targetLang;
+    this.verbose = options.verbose ?? false;
 
     // 缓存目录：默认 .comment-translator-cache
     this.cacheDir = options.cacheDir || path.resolve(process.cwd(), '.comment-translator-cache');
@@ -91,7 +95,9 @@ export class TranslationCache {
           // 忽略损坏行
         }
       }
-      console.log(`[Cache] 已加载 ${this.memory.size} 条缓存记录: ${path.basename(this.cacheFile)}`);
+      if (this.verbose) {
+        console.log(`[Cache] 已加载 ${this.memory.size} 条缓存记录: ${path.basename(this.cacheFile)}`);
+      }
     } catch (err) {
       console.warn(`[Cache] 加载缓存文件失败: ${(err as Error).message}`);
     }
@@ -111,20 +117,6 @@ export class TranslationCache {
   }
 
   /**
-   * 批量查询，返回 Map<原文, 译文>，未命中的不在 Map 中
-   */
-  getBatch(texts: string[]): Map<string, string> {
-    const result = new Map<string, string>();
-    for (const text of texts) {
-      const translated = this.get(text);
-      if (translated !== null) {
-        result.set(text, translated);
-      }
-    }
-    return result;
-  }
-
-  /**
    * 写入单条缓存（异步批量落盘）
    */
   set(text: string, translated: string): void {
@@ -141,15 +133,6 @@ export class TranslationCache {
     this.memory.set(key, entry);
     this.writeBuffer.push(JSON.stringify(entry));
     this.scheduleFlush();
-  }
-
-  /**
-   * 批量写入
-   */
-  setBatch(pairs: Array<{ original: string; translated: string }>): void {
-    for (const { original, translated } of pairs) {
-      this.set(original, translated);
-    }
   }
 
   /**
@@ -189,18 +172,6 @@ export class TranslationCache {
     if (!fs.existsSync(this.cacheDir)) {
       fs.mkdirSync(this.cacheDir, { recursive: true });
     }
-  }
-
-  /**
-   * 统计信息
-   */
-  stats(): { total: number; backend: string; targetLang: string; cacheFile: string } {
-    return {
-      total: this.memory.size,
-      backend: this.backend,
-      targetLang: this.targetLang,
-      cacheFile: this.cacheFile,
-    };
   }
 
   /**

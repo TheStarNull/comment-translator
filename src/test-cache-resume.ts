@@ -11,7 +11,6 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { createTranslator } from './translator';
 import { CachedTranslator } from './cached-translator';
 
 const CACHE_DIR = path.join(__dirname, '.test-cache-resume');

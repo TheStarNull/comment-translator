@@ -11,8 +11,8 @@
     "start": "node dist/cli.js",
     "dev": "ts-node src/cli.ts",
     "test": "node dist/test-demo.js",
-    "test:unit": "node test-unit.js",
-    "test:fix": "ts-node test-fix.ts",
+    "test:unit": "ts-node src/polisher.test.ts",
+    "test:polish": "ts-node src/smoke-polish.ts",
     "test:cache": "ts-node src/test-cache-resume.ts"
   },
   "keywords": ["jsdoc", "translator", "deepl", "google-translate", "typescript", "comments"],

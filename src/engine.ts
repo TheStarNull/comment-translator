@@ -1,11 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import chalk from 'chalk';
-import { ITranslator, DeepLTranslator, createTranslator } from './translator';
+import { ITranslator } from './translator';
 import { extractComments, cleanCommentText, restoreComments, ExtractedComment } from './parser';
 import { parseJSDoc, extractTranslatableParts, applyTranslations, serializeJSDoc } from './jsdoc-parser';
 import { TermProtector, TermProtectorOptions } from './term-protector';
-import { Polisher, PolisherOptions, PolishStyle } from './polisher';
+import { Polisher, PolisherOptions } from './polisher';
 
 export interface EngineConfig {
   /** Source directory or file */
@@ -117,7 +117,11 @@ export class TranslationEngine {
       ...config,
     };
 
-    // Keep a reference to the (possibly cached) translator for later use.
+    // Keep a reference to the translator for later use. It is expected to
+    // ALREADY include the cache decorator — createTranslator() in translator.ts
+    // wraps the raw backend with CachedTranslator when opts.cache is set. That
+    // single wrapping point avoids double-caching (which would corrupt hit-rate
+    // stats and waste lookups). We just hold a reference and flush it on exit.
     this.translator = config.translator;
 
     // Lazily created on first use; null when no protection is configured.
@@ -126,13 +130,6 @@ export class TranslationEngine {
     // Semantic polishing pass (disabled by default; opt in via config.polish).
     // Lives after translation + term restoration, so it sees real identifiers.
     this.polisher = config.polish?.enabled ? new Polisher(config.polish) : null;
-
-    // The translator passed in is expected to ALREADY include the cache
-    // decorator — createTranslator() in translator.ts wraps the raw backend
-    // with CachedTranslator when opts.cache is set. That single wrapping point
-    // avoids double-caching (which would corrupt hit-rate stats and waste
-    // lookups). We just keep a reference here and flush it on shutdown.
-    this.translator = config.translator;
   }
 
   /**
@@ -201,7 +198,7 @@ export class TranslationEngine {
     return this.config.progress && !this.config.verbose;
   }
 
-  private updateFileProgress(current: number, total: number, extra: string): void {
+  private updateFileProgress(current: number, extra: string): void {
     const bar: ProgressBar | undefined = (this as any)._fileBar;
     if (bar) bar.update(current, extra);
   }
@@ -209,31 +206,6 @@ export class TranslationEngine {
   private finishProgress(): void {
     const bar: ProgressBar | undefined = (this as any)._fileBar;
     if (bar) bar.done(`${this.stats.commentsTranslated} comments translated`);
-  }
-
-  /**
-   * Process all files in a directory
-   */
-  private async processDirectory(dir: string): Promise<void> {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-
-      if (entry.isDirectory()) {
-        if (this.config.skipCommonDirs && SKIP_DIRS.includes(entry.name)) {
-          if (this.config.verbose) {
-            console.log(chalk.gray(`  Skipping directory: ${fullPath}`));
-          }
-          continue;
-        }
-        if (this.config.recursive) {
-          await this.processDirectory(fullPath);
-        }
-      } else if (entry.isFile()) {
-        await this.processFile(fullPath);
-      }
-    }
   }
 
   /**
@@ -381,7 +353,7 @@ export class TranslationEngine {
     if (!this.shouldShowProgress()) return;
     if (index === undefined || total === undefined) return;
     const name = filePath ? path.basename(filePath) : '';
-    this.updateFileProgress(index + 1, total, name);
+    this.updateFileProgress(index + 1, name);
   }
 
   private clearProgressLine(): void {

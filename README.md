@@ -41,7 +41,7 @@ npm install
 npm run build    # 编译到 dist/（也可直接用包内预编译的 dist/）
 ```
 
-依赖：`node-fetch`、`form-data`、`google-auth-library`。Node ≥ 16。
+依赖：`chalk`、`commander`、`deepl-node`、`dotenv`。所有网络请求使用 Node 原生 `fetch`（无需 `node-fetch` / `form-data`），Google 服务账号鉴权使用 Node 内置 `crypto`（无需 `google-auth-library`）。**Node ≥ 18**。
 
 ---
 
@@ -116,7 +116,7 @@ node dist/cli.js ./src --mock --target zh
 
 ## 💾 翻译缓存 / 断点续跑（v2.4.0，重点）
 
-缓存默认关闭，**加 `--cache-dir` 即开启**。开启后：
+缓存**默认开启**（默认目录 `.comment-translator-cache`，可用 `--cache-dir <dir>` 改到别处）。用 `--no-cache` 可完全关闭。开启后：
 
 - 已翻译的文本直接命中缓存，不再请求 API
 - 进程中断（Ctrl+C / 网络失败 / 配额耗尽）后，**用完全相同的命令重跑，只翻译剩余未缓存部分**
@@ -136,11 +136,11 @@ node dist/cli.js ./src --no-cache --target zh
 node dist/cli.js ./src --clear-cache --target zh
 ```
 
-缓存文件：`.cache/libretranslate-auto-zh.jsonl`（JSONL 追加写，进程结束自动 flush）。
+缓存文件：`.comment-translator-cache/libretranslate-auto-zh.jsonl`（JSONL 追加写，进程结束自动 flush）。
 
-**判断缓存是否生效**：日志中 `API calls: X → saved Y calls`，`Y > 0` 即表示命中。
+**判断缓存是否生效**：运行结束会打印 `[Cache] hits=…, misses=…, hit-rate=…% (saved N API calls)`，`hits > 0`（即 `saved N > 0`）表示命中。需要逐步的命中/未命中日志时，加 `--verbose`。
 
-> 若 `saved` 一直为 0，确认重跑时 `--backend` / `--target` / `--source-lang` 与首次完全一致——缓存 key 包含这三项。
+> 若 `saved` 一直为 0，确认重跑时 `--backend` / `--target` / `--source` 与首次完全一致——缓存 key 包含这三项。
 
 ---
 
@@ -233,7 +233,7 @@ Options:
                                  DeepL: ZH/ZH-HANT/EN/JA/KO/DE/FR/ES/RU/PT-BR...
                                  Google/Libre: zh-CN/zh-TW/en/ja/ko/de/fr/es/...
   -s, --source <lang>            源语言代码 (可选, 默认自动检测)
-  -b, --backend <name>           翻译后端: deepl | deepl-free | google | libretranslate | mock (默认: deepl)
+  -b, --backend <name>           翻译后端: deepl | google | libretranslate (默认: deepl；--mock 切换到模拟翻译器)
   -k, --api-key <key>            API Key
   --free                         DeepL: 强制 Free 端点 (api-free.deepl.com)
   --pro                          DeepL: 强制 Pro 端点 (api.deepl.com)
@@ -243,7 +243,7 @@ Options:
   --google-credentials <path>    Google 服务账号 key.json 路径
   --libre-url <url>              LibreTranslate 服务地址 (默认: http://localhost:5000)
   --libre-key <key>              LibreTranslate API Key (公共实例可省略)
-  --cache-dir <dir>              缓存目录, 指定即开启断点续跑
+  --cache-dir <dir>              缓存目录 (默认: .comment-translator-cache；缓存默认开启)
   --no-cache                     本次运行忽略已有缓存
   --clear-cache                  运行前清空缓存
   --mock                         使用模拟翻译器 (无需 API Key)
@@ -400,8 +400,7 @@ setPermutation(permutation: BlockPermutation): void;
 comment-translator/
 ├── src/
 │   ├── cli.ts                        # 命令行入口 (--backend 参数)
-│   ├── translator.ts                 # ITranslator 接口 + 后端工厂 createTranslator()
-│   ├── deepl-translator.ts           # DeepL 后端 (Free/Pro 自动识别)
+│   ├── translator.ts                 # ITranslator 接口 + DeepL 后端 + 工厂 createTranslator()
 │   ├── google-translator.ts          # Google Cloud Translation API 封装
 │   ├── google-auth.ts                # Google 服务账号 JWT 签名 (纯 Node crypto)
 │   ├── libretranslate-translator.ts  # 🌍 LibreTranslate 后端 (v2.4.0)
@@ -411,16 +410,22 @@ comment-translator/
 │   ├── engine.ts                     # 核心翻译引擎 + 进度条 + 术语保护接入
 │   ├── term-protector.ts             # 🛡️ 术语保护: 占位符替换/还原 + 术语表加载
 │   ├── translation-cache.ts          # 💾 缓存实现 (JSONL 持久化)
-│   ├── cached-translator.ts         # 💾 缓存装饰器 (包裹任意后端, 统一断点续跑)
-│   ├── llm-client.ts                # ✨ LLM 后端抽象 (OpenAI 兼容 / Ollama, v2.5.0)
-│   ├── polisher.ts                  # ✨ 语义润色: LLM 重写 + 本地规则清理 (v2.5.0)
-│   ├── polisher.test.ts             # ✨ 润色单元测试 (27 项)
-│   ├── smoke-polish.ts              # ✨ 润色端到端冒烟测试 (8 项)
+│   ├── cached-translator.ts          # 💾 缓存装饰器 (包裹任意后端, 统一断点续跑)
+│   ├── llm-client.ts                 # ✨ LLM 后端抽象 (OpenAI 兼容 / Ollama, v2.5.0)
+│   ├── polisher.ts                   # ✨ 语义润色: LLM 重写 + 本地规则清理 (v2.5.0)
+│   ├── polisher.test.ts              # ✨ 润色单元测试 (27 项)
+│   ├── smoke-polish.ts               # ✨ 润色端到端冒烟测试 (8 项)
+│   ├── test-demo.ts                  # Mock 流程演示 (npm test)
+│   ├── test-cache.ts                 # 缓存单元测试
+│   ├── test-cache-e2e.ts             # 缓存端到端 (中断续跑) 测试
+│   ├── test-cache-resume.ts          # 缓存断点续跑集成测试 (npm run test:cache)
 │   └── global.d.ts
 ├── dist/                             # 预编译产物 (可直接 node dist/cli.js 使用)
 ├── package.json
 ├── tsconfig.json
 ├── CHANGELOG.md
+├── QUICKSTART.md
+├── .gitignore
 └── README.md
 ```
 
@@ -490,7 +495,7 @@ client.translateText(texts, sourceLang, targetLang, options);
 已修复：`path.extname('index.d.ts')` 返回 `.ts`，现改用「路径是否以扩展名结尾」匹配，`.d.ts` 可正常处理。
 
 ### 开了 `--cache-dir` 但 `saved` 一直是 0
-确认重跑时 `--backend` / `--target` / `--source-lang` 完全一致，缓存 key = `SHA-1(原文 + 后端 + 源语言 + 目标语言)`，任一项不同都会不命中。
+确认重跑时 `--backend` / `--target` / `--source` 完全一致，缓存 key = `SHA-1(原文 + 后端 + 源语言 + 目标语言)`，任一项不同都会不命中。
 
 ### LibreTranslate 报连接失败
 先 `curl http://localhost:5000/languages` 验证服务可达；公共实例有速率限制，建议 Docker 自托管。

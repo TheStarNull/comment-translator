@@ -54,15 +54,6 @@ interface GlossaryFile {
   placeholders?: boolean;
 }
 
-/**
- * A token replaced by a placeholder. `original` is the exact source substring
- * (preserving case / punctuation) so restoration is lossless.
- */
-interface ProtectedToken {
-  placeholder: string;
-  original: string;
-}
-
 const PLACEHOLDER_BASE = 0xe000; // Unicode private-use area
 const MAX_PLACEHOLDERS = 0x1000; // 4096 — far more than any single comment needs
 

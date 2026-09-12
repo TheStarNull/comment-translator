@@ -56,6 +56,7 @@ export class CachedTranslator implements ITranslator {
       backend: options.backend,
       sourceLang: options.sourceLang || 'auto',
       targetLang: options.targetLang,
+      verbose: this.verbose,
     });
   }
 

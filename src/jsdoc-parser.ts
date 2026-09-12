@@ -47,8 +47,6 @@ export interface ParsedJSDoc {
   descriptionLines: string[];
   /** Parsed tags, each carrying its translatable description. */
   tags: JSDocTag[];
-  /** true if the comment contains inline tags like {@link}, {@code}. */
-  hasInlineTags: boolean;
 }
 
 /**
@@ -80,34 +78,6 @@ export function isTranslatableTag(tag: string): boolean {
   return TRANSLATABLE_TAGS.has(tag);
 }
 
-const JSDOC_TAGS = [
-  'param', 'arg', 'argument', 'property', 'prop',
-  'returns', 'return', 'yields', 'yield',
-  'description', 'desc', 'remarks', 'summary',
-  'example', 'examples',
-  'throws', 'throw', 'exception',
-  'see', 'link',
-  'author', 'version', 'since',
-  'deprecated',
-  'type', 'typedef', 'callback',
-  'interface', 'class',
-  'extends', 'implements',
-  'template', 'generic',
-  'default', 'defaultvalue',
-  'enum', 'readonly',
-  'private', 'public', 'protected', 'internal',
-  'async', 'generator',
-  'fires', 'emits', 'listens',
-  'modifies', 'requires',
-  'summary', 'file', 'license',
-  'todo', 'fixme', 'note', 'warning',
-  'category', 'group', 'namespace',
-  'memberof', 'module',
-  // Minecraft-specific (non-translatable, listed so parseJSDoc recognises
-  // them as structural tags rather than prose):
-  'privilege',
-];
-
 /* ------------------------------------------------------------------ */
 /*  Inline-tag handling                                                */
 /* ------------------------------------------------------------------ */
@@ -118,30 +88,6 @@ const JSDOC_TAGS = [
  * `{@code someCode}` — the identifier / code inside must never be altered.
  */
 const INLINE_TAG_RE = /\{@(link|linkcode|linkplain|code|inheritdoc)\s*[^}]*\}/g;
-
-/**
- * Split a description into alternating [text, inline-tag] segments.
- * Used by extractTranslatableParts so that inline tags are NOT sent to the
- * translator (they come back as a single placeholder segment).
- *
- * Example input : "See {@link Foo} for details."
- * Output segments: ["See ", "{@link Foo}", " for details."]
- */
-export function splitInlineTags(text: string): string[] {
-  const segments: string[] = [];
-  let last = 0;
-  for (const m of text.matchAll(INLINE_TAG_RE)) {
-    if (m.index! > last) {
-      segments.push(text.slice(last, m.index!));
-    }
-    segments.push(m[0]); // the inline tag itself, preserved verbatim
-    last = m.index! + m[0].length;
-  }
-  if (last < text.length) {
-    segments.push(text.slice(last));
-  }
-  return segments;
-}
 
 /**
  * True when the given description is entirely composed of inline tags
@@ -166,7 +112,6 @@ export function parseJSDoc(text: string): ParsedJSDoc {
   const result: ParsedJSDoc = {
     descriptionLines: [],
     tags: [],
-    hasInlineTags: INLINE_TAG_RE.test(text),
   };
 
   if (!text.trim()) return result;
@@ -317,25 +262,6 @@ export function serializeJSDoc(parsed: ParsedJSDoc): string {
 /* ------------------------------------------------------------------ */
 
 /**
- * A translation "slot" descriptor. Each slot corresponds to one entry in the
- * flat `string[]` returned by extractTranslatableParts. Slots come in two
- * flavours:
- *  - `{ kind: 'main' }`              → the top-level description
- *  - `{ kind: 'tag', tagIndex }`     → a tag description (identified by its
- *                                      index in `parsed.tags`, NOT by tag name,
- *                                      so multi-line @param / @remarks blocks
- *                                      cannot collide)
- *
- * Using the tag INDEX (rather than relying on filtered iteration order) is
- * what guarantees alignment between extraction and apply, even when some tags
- * are skipped as marker / inline-only.
- */
-interface Slot {
-  kind: 'main' | 'tag';
-  tagIndex?: number;
-}
-
-/**
  * Extract translatable text segments from a ParsedJSDoc.
  * Returns an array of strings; order is: main description first (if any),
  * then each tag's description in declaration order. Segments are NOT joined
@@ -416,7 +342,6 @@ export function applyTranslations(
   const result: ParsedJSDoc = {
     descriptionLines: [...parsed.descriptionLines],
     tags: parsed.tags.map(t => ({ ...t })),
-    hasInlineTags: parsed.hasInlineTags,
   };
 
   // --- main description -------------------------------------------------
