@@ -1,4 +1,4 @@
-# Comment Translator 🌐 (v2.5.1)
+# Comment Translator 🌐 (v2.5.2)
 
 一个专门翻译 **JSDoc** 和代码注释的工具，支持 **JavaScript / TypeScript**（含 `.js`, `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`, `.d.ts`），通过 **DeepL** / **Google Translate** / **LibreTranslate** 进行翻译，输出翻译后的文件。内置**翻译缓存（断点续跑）**，中断后重跑只翻剩余部分。
 
@@ -29,7 +29,7 @@
 ### 效率
 - 💾 **翻译缓存 / 断点续跑 (v2.4.0)** — 以 `SHA-1(原文 + 后端 + 语言对)` 为 key 持久化，中断后重跑只翻剩余部分，节省 API 配额
 - ✨ **语义润色 (v2.5.0)** — `--polish` 开启，在翻译 + 术语还原之后做「LLM 提示词重写 + 本地规则清理」，让译文读起来像人写的技术文档；支持 OpenAI / DeepSeek / Ollama 本地等多种 LLM
-- 🧪 **Mock 模式** — 内置模拟翻译器，无需 API Key 即可测试
+- 🧪 **Mock 模式** — 内置模拟翻译器：离线、确定性、结构保真（保留 JSDoc 标签/代码标识符），无需 API Key 即可测试
 
 ---
 
@@ -115,6 +115,30 @@ node dist/cli.js ./src --backend libretranslate --libre-url http://localhost:500
 ```bash
 node dist/cli.js ./src --mock --target zh
 ```
+
+离线、确定性、**不联网**，适合跑流程/CI/演示。输出会逐行带 `[zh] ` 标记，确保不会被误认为真实译文。
+
+模拟器尽量贴近真实流程的**结构保真**行为。下面是真实的 `--mock --target zh` 输出：
+
+```ts
+/**                                              /**
+ * Returns the total value.                        * [zh] 返回 这 总计 值.
+ * @param {string} userName - The user name        * @param [zh] {string} userName - 这 用户 名称
+ * @param {number} count - Number of items     →    * @param [zh] {number} count - 数字 的 项
+ * @returns {boolean} True if the value is valid    * @returns [zh] {boolean} 真 如果 这 值 是 有效
+ * @example                                        * @example
+ * const total = getTotal(user);                   * const total = getTotal(user);   ← 原样保留
+ */                                               */
+```
+
+即：`{Type}`、参数名、`-` 分隔符、`@example` 正文、代码标识符（`BlockPermutation` / `MAX_RETRY` / `foo_bar` / `v2`）、`{@link ...}`、`` `code span` `` 与 URL 都**不会被翻译**——正是真实翻译器应有的行为。
+
+> **`@example` / `@code` / `@pre` 的正文一律逐字保留**。示例是**代码**，送去翻译会被破坏成 `const 用户 = getUser();` 这样无法编译的内容。
+
+支持 **8 种**目标语言：`zh` `ja` `ko` `es` `fr` `de` `pt` `ru`（`zh-CN`、`pt-BR` 等地区标签会自动归一化）；其它语言（含 `en`）回退为伪本地化。
+
+> ⚠️ **缺少 API Key 时会直接报错退出（`exit 1`），不会静默降级为模拟**。
+> 若希望旧行为（自动降级），显式加 `--allow-mock`。
 
 ---
 
@@ -251,7 +275,8 @@ Options:
   --cache-dir <dir>              缓存目录 (默认: .comment-translator-cache；缓存默认开启)
   --no-cache                     本次运行忽略已有缓存
   --clear-cache                  运行前清空缓存
-  --mock                         使用模拟翻译器 (无需 API Key)
+  --mock                         使用模拟翻译器 (离线/模拟输出, 无需 API Key)
+  --allow-mock                   缺少凭据时降级为模拟翻译器 (默认: 直接报错退出)
   --extensions <exts>            文件扩展名 (默认: ".js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts")
   --no-recursive                 禁用递归目录遍历
   --dry-run                      预览模式, 不写入文件
@@ -421,11 +446,11 @@ comment-translator/
 │   ├── google-translator.ts          # Google Cloud Translation API 封装
 │   ├── google-auth.ts                # Google 服务账号 JWT 签名 (纯 Node crypto)
 │   ├── libretranslate-translator.ts  # 🌍 LibreTranslate 后端 (v2.4.0)
-│   ├── mock-translator.ts            # 模拟翻译器 (测试用)
+│   ├── mock-translator.ts            # 🧪 模拟翻译器 (离线/结构保真/8 语言)
 │   ├── parser.ts                     # 注释提取与还原 (按文件类型分发)
 │   ├── lexer.ts                      # 🔍 零依赖词法器 (字符串/模板 ${}/正则 消歧)
 │   ├── ts-comments.ts                # 🔍 .jsx/.tsx 的 TS parser 提取 (token 间隙扫描)
-│   ├── jsdoc-parser.ts               # JSDoc 标签解析 (多行/内联标签保护)
+│   ├── jsdoc-parser.ts               # JSDoc 标签解析 (多行/内联标签保护, @example 原样保留)
 │   ├── engine.ts                     # 核心翻译引擎 + 进度条 + 术语保护接入
 │   ├── term-protector.ts             # 🛡️ 术语保护: 占位符替换/还原 + 术语表加载
 │   ├── translation-cache.ts          # 💾 缓存实现 (JSONL 持久化)
@@ -443,6 +468,8 @@ comment-translator/
 │   ├── test-protection-default.ts    # 🛡️ 术语保护默认开启 E2E 测试 (npm run test:protection)
 │   ├── test-timeout.ts               # ⏱️ 网络超时回归测试 (npm run test:timeout)
 │   ├── parser.test.ts                # 🔍 注释提取回归测试 (npm run test:parser)
+│   ├── mock-translator.test.ts       # 🧪 Mock + 无密钥契约测试 (npm run test:mock)
+│   ├── jsdoc-parser.test.ts          # 📑 JSDoc 部件提取/@example 保护 (npm run test:jsdoc)
 │   └── global.d.ts
 ├── dist/                             # 预编译产物 (可直接 node dist/cli.js 使用)
 ├── package.json

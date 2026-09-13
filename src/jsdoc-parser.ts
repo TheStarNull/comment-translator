@@ -67,7 +67,10 @@ export const TRANSLATABLE_TAGS: ReadonlySet<string> = new Set([
   'returns', 'return', 'yields', 'yield',
   'description', 'desc', 'summary', 'remarks',
   'throws', 'throw', 'exception',
-  'example', 'examples',
+  // NOTE: `@example` / `@code` / `@pre` are deliberately ABSENT.
+  // Their payload is *code*, not prose — sending it to a translator corrupts
+  // it (`const user = getUser();` → `const 用户 = getUser();`), producing an
+  // example that no longer compiles. See VERBATIM_TAGS below.
   'deprecated', 'todo', 'fixme', 'note', 'warning',
   'see', 'author',
   'beta', 'alpha', 'experimental', 'internal', 'public', 'private',
@@ -76,6 +79,25 @@ export const TRANSLATABLE_TAGS: ReadonlySet<string> = new Set([
 
 export function isTranslatableTag(tag: string): boolean {
   return TRANSLATABLE_TAGS.has(tag);
+}
+
+/**
+ * Tags whose payload is CODE and must be copied through byte-for-byte.
+ *
+ * Translating these silently breaks the documentation: identifiers and
+ * keywords inside the sample get rewritten into the target language, so the
+ * published example stops compiling. `@example` is by far the most common.
+ *
+ * Kept as an explicit, *defensive* check even though these tags are already
+ * excluded from TRANSLATABLE_TAGS — a future addition to that set must not be
+ * able to reintroduce the corruption.
+ */
+export const VERBATIM_TAGS: ReadonlySet<string> = new Set([
+  'example', 'examples', 'code', 'codeblock', 'pre',
+]);
+
+export function isVerbatimTag(tag: string): boolean {
+  return VERBATIM_TAGS.has(tag);
 }
 
 /* ------------------------------------------------------------------ */
@@ -280,6 +302,7 @@ export function extractTranslatableParts(parsed: ParsedJSDoc): string[] {
 
   for (const tag of parsed.tags) {
     if (!isTranslatableTag(tag.tag)) continue;
+    if (isVerbatimTag(tag.tag)) continue;   // `@example` payload is code — never translate
     if (tag.inlineOnly) continue;          // never translate bare {@link} lines
     const desc = tag.description;
     if (!desc) continue;
@@ -363,6 +386,7 @@ export function applyTranslations(
     const desc = tag.description;
 
     if (!isTranslatableTag(tag.tag)) continue;
+    if (isVerbatimTag(tag.tag)) continue;   // must mirror extractTranslatableParts()
     if (tag.inlineOnly) continue;
     if (!desc) continue;
     if (isMarkerTag(tag.tag) && !looksLikeProse(desc)) continue;

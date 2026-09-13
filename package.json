@@ -1,6 +1,6 @@
 {
   "name": "comment-translator",
-  "version": "2.5.1",
+  "version": "2.5.2",
   "description": "Translate JSDoc and code comments using DeepL / Google Translate API. Supports TS/JS/JSX.",
   "main": "dist/cli.js",
   "bin": {
@@ -17,6 +17,8 @@
     "test:protection": "tsc && ts-node src/test-protection-default.ts",
     "test:timeout": "ts-node src/test-timeout.ts",
     "test:parser": "ts-node src/parser.test.ts",
+    "test:mock": "tsc && ts-node src/mock-translator.test.ts",
+    "test:jsdoc": "ts-node src/jsdoc-parser.test.ts",
     "test:cache": "ts-node src/test-cache-resume.ts"
   },
   "keywords": [

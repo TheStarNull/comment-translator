@@ -45,7 +45,8 @@ program
   .option('--libre-url <url>', 'LibreTranslate only: base URL (e.g. "http://localhost:5000"). Defaults to $LIBRETRANSLATE_URL or http://localhost:5000')
   .option('--libre-key <key>', 'LibreTranslate only: API key for protected instances ($LIBRETRANSLATE_API_KEY)')
   .option('--timeout <ms>', 'Per-request network timeout in ms for the translation backend (default: 30000)', '30000')
-  .option('--mock', 'Use MockTranslator instead of real API (for testing)')
+  .option('--mock', 'Use MockTranslator instead of a real API (offline, simulated output)')
+  .option('--allow-mock', 'If credentials are missing, fall back to the mock translator instead of failing')
   .option('--extensions <exts>', 'Comma-separated file extensions', '.js,.ts,.jsx,.tsx,.mjs,.cjs,.d.ts')
   .option('--no-recursive', 'Disable recursive directory traversal')
   .option('--dry-run', 'Preview without writing files')
@@ -103,29 +104,50 @@ program
 
       // Build translator
       let translator: ITranslator;
-      // Mock when explicitly requested, OR when no credentials are available.
-      // LibreTranslate at "localhost:5000" counts as configured even without a key,
-      // so we don't force-mock it (unlike DeepL/Google which always need auth).
+      /** True when output is simulated rather than produced by a real API. */
+      let mockInUse = false;
+      // LibreTranslate at "localhost:5000" counts as configured even without a
+      // key, so it never forces the mock (unlike DeepL/Google, which need auth).
       const hasLibreConfig =
         backend === 'libretranslate' &&
         (apiKey || process.env.LIBRETRANSLATE_URL || options.libreUrl);
-      const useMock =
-        options.mock ||
-        (!apiKey &&
-          backend !== 'google' &&
-          !process.env.GOOGLE_APPLICATION_CREDENTIALS &&
-          !hasLibreConfig);
 
-      if (useMock) {
-        if (!options.mock) {
-          console.warn(
-            chalk.yellow(
-              `⚠ No ${apiKeyEnv} provided. Falling back to MockTranslator.`
-            )
-          );
-          console.warn(chalk.gray('  Set --api-key / ' + apiKeyEnv + ' for real translation.\n'));
-        }
+      // Google can authenticate with either an API key or a service-account
+      // file, so it counts as configured when either is present.
+      const hasCredentials =
+        !!apiKey ||
+        (backend === 'google' && !!process.env.GOOGLE_APPLICATION_CREDENTIALS) ||
+        (backend === 'libretranslate' && !!hasLibreConfig) ||
+        backend === 'libretranslate'; // LibreTranslate needs no key (self-hosted)
+
+      if (options.mock) {
+        // Explicitly requested — the only way mock output is produced silently.
         translator = new MockTranslator({ targetLanguage: targetLang });
+        mockInUse = true;
+        console.log(chalk.yellow('   ⚠ Mock mode: output is SIMULATED, not a real translation.\n'));
+      } else if (!hasCredentials) {
+        // Missing credentials used to fall back to the mock translator with a
+        // single warning. That produced plausible-looking but entirely fake
+        // output — easy to mistake for success, especially in CI. Now it is a
+        // hard error, and the fallback is available only on explicit request.
+        if (options.allowMock) {
+          console.warn(
+            chalk.yellow(`⚠ No ${apiKeyEnv} provided. Falling back to MockTranslator (--allow-mock).`)
+          );
+          console.warn(chalk.gray('  Output is SIMULATED, not a real translation.\n'));
+          translator = new MockTranslator({ targetLanguage: targetLang });
+          mockInUse = true;
+        } else {
+          console.error(chalk.red(`✗ No credentials for backend "${backend}".`));
+          console.error(chalk.gray(`  Missing: ${apiKeyEnv}`));
+          console.error('');
+          console.error(chalk.gray('  Fix it by one of:'));
+          console.error(chalk.gray(`    · export ${apiKeyEnv}=<your-key>`));
+          console.error(chalk.gray('    · pass --api-key <your-key>'));
+          console.error(chalk.gray('    · use a backend that needs no key: --backend libretranslate'));
+          console.error(chalk.gray('    · run a simulated pass:        --mock  (or --allow-mock to auto-fall back)'));
+          process.exit(1);
+        }
       } else {
         translator = createTranslator({
           backend,
@@ -218,9 +240,12 @@ program
         console.log(chalk.yellow(`   Cleared cache: ${cacheDir}\n`));
       }
 
-      console.log(chalk.bold(`🚀 Comment Translator (${backend === 'google' ? 'Google' : backend === 'libretranslate' ? 'LibreTranslate' : 'DeepL'})`));
+      const backendLabel = mockInUse
+        ? 'Mock (simulated)'
+        : backend === 'google' ? 'Google' : backend === 'libretranslate' ? 'LibreTranslate' : 'DeepL';
+      console.log(chalk.bold(`🚀 Comment Translator (${backendLabel})`));
       console.log(chalk.gray(`   Input:     ${input}`));
-      console.log(chalk.gray(`   Backend:   ${useMock ? 'Mock' : backend}`));
+      console.log(chalk.gray(`   Backend:   ${mockInUse ? 'mock (simulated)' : backend}`));
       if (options.glossaryFile || (options.term && options.term.length)) {
         console.log(chalk.gray(`   Glossary:  ${options.glossaryFile || '(inline terms)'}`));
       }
