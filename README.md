@@ -1,4 +1,4 @@
-# Comment Translator 🌐 (v2.5.2)
+# Comment Translator 🌐 (v2.6.0)
 
 一个专门翻译 **JSDoc** 和代码注释的工具，支持 **JavaScript / TypeScript**（含 `.js`, `.ts`, `.jsx`, `.tsx`, `.mjs`, `.cjs`, `.d.ts`），通过 **DeepL** / **Google Translate** / **LibreTranslate** 进行翻译，输出翻译后的文件。内置**翻译缓存（断点续跑）**，中断后重跑只翻剩余部分。
 
@@ -472,6 +472,11 @@ comment-translator/
 │   ├── jsdoc-parser.test.ts          # 📑 JSDoc 部件提取/@example 保护 (npm run test:jsdoc)
 │   └── global.d.ts
 ├── dist/                             # 预编译产物 (可直接 node dist/cli.js 使用)
+├── plugins/
+│   └── acode-comment-translator/     # 📱 Acode 插件 (复用 src/ 核心, 经 @core 别名)
+│       ├── plugin.json               # Acode 插件清单
+│       ├── build.mjs / pack.mjs      # esbuild 打包 + 生成可安装 zip
+│       └── src/                      # 入口/设置/后端工厂/翻译组合逻辑
 ├── package.json
 ├── tsconfig.json
 ├── CHANGELOG.md

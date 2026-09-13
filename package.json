@@ -1,6 +1,6 @@
 {
   "name": "comment-translator",
-  "version": "2.5.2",
+  "version": "2.6.0",
   "description": "Translate JSDoc and code comments using DeepL / Google Translate API. Supports TS/JS/JSX.",
   "main": "dist/cli.js",
   "bin": {

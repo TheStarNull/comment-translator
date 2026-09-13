@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.6.0] - 2026-09-13
+### Added — Acode 插件（`plugins/acode-comment-translator`）
+- **在 Acode 编辑器中直接翻译 JSDoc / 代码注释**，只改注释、绝不改动代码。新增命令：
+  · 翻译当前文件注释 · 开关「保存时自动翻译」· 查看当前设置。
+- **复用 CLI 核心，不复制代码**：注释词法器、JSDoc 解析、术语保护、`rebuildComment` 全部经 `@core/*` 别名指向仓库根的 `src/`。插件与命令行**永远共享同一套注释提取逻辑**，不会各修各的 bug。
+  · 无法复用的是 `engine.ts`（围绕文件系统/进度条/JSONL 缓存设计）与 `cli.ts`，插件用 `translate-source.ts` 提供等价的「翻译一个文件」组合逻辑。
+- **仅提供 WebView 可行的后端**：`mock`（默认）与 `libretranslate`，均基于 `fetch`，无需打包任何 SDK。
+  · 默认后端是 `mock`，输出为模拟内容并逐行带 `[lang]` 标记，因此**不可能**被误认为真实翻译——可在零密钥下跑通完整流程。
+  · **不支持 DeepL / Google**：CLI 依赖 `deepl-node` SDK 与 Node `crypto` 签名，二者在 WebView 中不存在。二者可改用纯 REST 实现，但那是独立改动，这里不做假装支持。
+- **打包/构建**：`build.mjs`（esbuild → 单文件 IIFE，57.9kb）、`pack.mjs`（零依赖生成 Acode 可安装 zip）。`pack.mjs` 用 node `zlib` 而非 `zip` 命令，因为原生 Termux 通常没有 `zip`；归档用固定时间戳，重复打包**字节一致**。
+- **测试** `test/plugin.test.ts`（42 项）：既测 `translateSource()` 的组合语义（只改注释、代码逐字不变、术语保护、正则/模板/JSX 不被误判、后端返回残缺时不破坏文件），也测**真实构建产物**——把 `dist/main.js` 装进伪造的 `acode` 全局，启动后校验命令注册、设置描述符，并端到端跑通「命令 → Mock 后端 → 写回编辑器」。
+  · 测试经 `build-test.mjs` 用**与生产构建相同的 `@core` 别名**打包，因此别名配错会直接让测试失败，而不是只在 Acode 运行时才炸。
+
 ## [2.5.2] - 2026-09-13
 ### Fixed
 - **`@example` 代码被当作散文翻译，产出无法编译的示例**：`@example` / `@examples` / `@code` / `@pre` 的内容是**代码**而非描述，但它们此前都在 `TRANSLATABLE_TAGS` 中，因此整段会被送进翻译 API。真实后果：
